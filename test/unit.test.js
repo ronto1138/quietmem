@@ -23,14 +23,17 @@ test('terms: distinctive words, hyphen parts, digits, accents folded', () => {
   assert.equal(norm('Ñandú'), 'nandu');
 });
 
+// Fake secrets are assembled at runtime so no secret scanner (gitleaks, GitHub) sees a literal.
+const fake = (...parts) => parts.join('');
+
 test('redact: masks common key formats and keeps the label', () => {
-  const s = 'key sk-ant-abcdefghijklmnopqrstuv and postgresql://user:hunter2hunter2@localhost:5432/db token=abcd1234efgh5678';
+  const s = `key ${fake('sk', '-ant-', 'abcdefghijklmnopqrstuv')} and ${fake('postgresql://user:', 'hunter2hunter2', '@localhost:5432/db')} ${fake('token', '=', 'abcd1234efgh5678')}`;
   const r = redact(s);
   assert.ok(!r.includes('abcdefghijklmnop'));
   assert.ok(!r.includes('hunter2'));
   assert.ok(r.includes('postgresql://user:[REDACTED]@localhost'));
   assert.ok(r.includes('token=[REDACTED]'));
-  assert.ok(looksLikeSecret('ghp_abcdefghijklmnopqrstuvwxyz0123'));
+  assert.ok(looksLikeSecret(fake('ghp', '_', 'abcdefghijklmnopqrstuvwxyz0123')));
   assert.ok(!looksLikeSecret('plain words about a deploy'));
   assert.equal(redact('/home/me/projects/some/long/path/file.js'), '/home/me/projects/some/long/path/file.js');
 });
@@ -114,7 +117,7 @@ test('jsonl adapter: aliases', () => {
 });
 
 test('distill: parses proposals, drops secrets and bad types, renders pending decisions', () => {
-  const raw = 'noise {"proposals":[{"action":"new","file":"retry policy.md","name":"retry-policy","description":"d","type":"project","body":"Retries are capped at 3.","evidence":"10:00 — cap at 3"},{"action":"new","file":"k.md","name":"k","description":"d","type":"reference","body":"key is sk-abcdefghijklmnopqrstu"},{"file":"x.md","name":"x","type":"bogus","body":"b"}]} trailing';
+  const raw = 'noise {"proposals":[{"action":"new","file":"retry policy.md","name":"retry-policy","description":"d","type":"project","body":"Retries are capped at 3.","evidence":"10:00 — cap at 3"},{"action":"new","file":"k.md","name":"k","description":"d","type":"reference","body":"key is ' + fake('sk', '-', 'abcdefghijklmnopqrstu') + '"},{"file":"x.md","name":"x","type":"bogus","body":"b"}]} trailing';
   const p = parseProposals(raw);
   assert.equal(p.length, 1);
   assert.equal(p[0].file, 'retry_policy.md');

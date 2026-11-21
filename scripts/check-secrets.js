@@ -22,7 +22,8 @@ const ALLOWED = [
   /"integrity":\s*"sha(256|384|512)-/,       // package-lock.json integrity hashes
 ];
 // Files that contain example secrets on purpose (tests of the redactor itself).
-const SELF_TESTS = new Set(['test/unit.test.js', 'src/redact.js', 'scripts/check-secrets.js']);
+// .gitleaksignore holds commit:file:rule fingerprints (40-hex commit ids), not secrets.
+const SELF_TESTS = new Set(['test/unit.test.js', 'src/redact.js', 'scripts/check-secrets.js', '.gitleaksignore']);
 // Personal or machine-specific markers that should never ship. Extend locally via QUIETMEM_PRIVATE_MARKERS="a,b".
 const PRIVATE = (process.env.QUIETMEM_PRIVATE_MARKERS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 

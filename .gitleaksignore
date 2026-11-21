@@ -1,0 +1,2 @@
+# Findings reviewed and accepted (fingerprint per line). Only fake secrets used by the redactor tests.
+0b6c0cd3cdb57c09c756cf3118ba12cf4e0344a4:test/unit.test.js:generic-api-key:27
