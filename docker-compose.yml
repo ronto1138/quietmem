@@ -1,0 +1,25 @@
+# Postgres + pgvector for quietmem, bound to localhost only.
+#   docker compose up -d && quietmem init
+#
+# shared_buffers: the vector index must fit in it, or the first query after a pause reads from disk and
+# blows the recall budget (measured: 10-70 ms warm vs 280-2,300 ms cold). Check the index size with
+# `quietmem doctor` and raise this if it does not fit. See docs/performance.md.
+#
+# Set QUIETMEM_DB_PASSWORD in your environment (or a .env file next to this one, which git ignores).
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.0-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quietmem
+      POSTGRES_DB: quietmem
+      POSTGRES_PASSWORD: ${QUIETMEM_DB_PASSWORD:?set QUIETMEM_DB_PASSWORD}
+    command: ["postgres", "-c", "shared_buffers=512MB", "-c", "shared_preload_libraries=pg_prewarm", "-c", "pg_prewarm.autoprewarm=on"]
+    ports:
+      - "127.0.0.1:${QUIETMEM_DB_PORT:-5433}:5432"
+    volumes:
+      - quietmem-pgdata:/var/lib/postgresql/data
+
+volumes:
+  quietmem-pgdata:

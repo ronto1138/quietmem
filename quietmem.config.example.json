@@ -1,0 +1,34 @@
+{
+  "dataDir": "~/.quietmem",
+  "database": {
+    "url": "postgresql://quietmem:CHANGE_ME@localhost:5433/quietmem",
+    "index": "hnsw"
+  },
+  "embedder": {
+    "provider": "ollama",
+    "url": "http://localhost:11434",
+    "model": "nomic-embed-text:v1.5",
+    "dimensions": 768
+  },
+  "recall": {
+    "budgetMs": 500,
+    "entities": ["acme-api", "billing-service", "jane"],
+    "entitiesFile": "~/.quietmem/entities.txt"
+  },
+  "index": {
+    "sources": [
+      { "adapter": "claude-code", "dir": "~/.claude/projects" }
+    ]
+  },
+  "projects": {
+    "rules": [
+      { "match": "/work/acme", "label": "acme" }
+    ]
+  },
+  "distill": {
+    "command": ["claude", "-p", "--output-format", "text"],
+    "timezone": "America/New_York",
+    "language": "English",
+    "memoryIndex": "~/notes/{project}/MEMORY.md"
+  }
+}

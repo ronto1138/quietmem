@@ -1,0 +1,22 @@
+node_modules/
+
+# Local config and secrets: never commit
+quietmem.config.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime data (logs hold timings only, but they are yours)
+*.log
+*.log.jsonl
+term-frequencies.json
+proposals/
+.quietmem/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
