@@ -3,18 +3,39 @@
   "version": "0.1.0",
   "description": "Local, precision-first memory for AI coding agents: recalls past conversations only when it is confident they matter.",
   "type": "module",
-  "bin": { "quietmem": "bin/quietmem.js" },
-  "files": ["bin", "src", "sql", "prompts", "docs", "quietmem.config.example.json", "docker-compose.yml"],
-  "engines": { "node": ">=20" },
+  "bin": {
+    "quietmem": "bin/quietmem.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "sql",
+    "prompts",
+    "docs",
+    "quietmem.config.example.json",
+    "docker-compose.yml"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "node --test test/*.test.js",
     "check-secrets": "node scripts/check-secrets.js"
   },
-  "keywords": ["memory", "claude-code", "mcp", "rag", "pgvector", "ollama", "ai-agents", "local-first"],
+  "keywords": [
+    "memory",
+    "claude-code",
+    "mcp",
+    "rag",
+    "pgvector",
+    "ollama",
+    "ai-agents",
+    "local-first"
+  ],
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "pg": "^8.13.0",
-    "zod": "^3.24.0"
+    "zod": "^4.6.7"
   }
 }
