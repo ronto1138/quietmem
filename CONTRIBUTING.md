@@ -29,3 +29,9 @@ it that way.
 
 Small and focused. Describe the problem, what you measured, and what changed. English, please, in code
 and docs (issues in Spanish are welcome too).
+
+## Releases
+
+Maintainers: bump `version` in package.json and CHANGELOG.md, then create a GitHub release `vX.Y.Z`. The
+`publish` workflow stages the package on npm through trusted publishing; a maintainer approves it on
+npmjs.com with 2FA. CI cannot publish on its own.

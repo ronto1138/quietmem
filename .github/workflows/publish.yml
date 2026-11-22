@@ -1,8 +1,9 @@
 name: publish
-# Publishes to npm when a GitHub release is published.
-# Auth: npm trusted publishing (OIDC). The package is linked to this repo and workflow on npmjs.com
-# (package settings, "Trusted Publisher"), so no token is stored in GitHub. --provenance ties each
-# version to the workflow run that built it. A version already on npm is skipped, not an error.
+# Stages a new version on npm when a GitHub release is published; a maintainer approves it on npmjs.com
+# (or `npm stage approve <id>`) with their own 2FA. CI alone can never publish.
+# Auth: npm trusted publishing (OIDC), linked on npmjs.com to this repo and workflow, so no token is
+# stored in GitHub. --provenance ties each version to the run that built it. A version already on npm
+# is skipped, not an error.
 on:
   release:
     types: [published]
@@ -28,4 +29,4 @@ jobs:
           V=$(node -p "require('./package.json').version")
           if npm view "quietmem@$V" version >/dev/null 2>&1; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "quietmem@$V is already on npm"; fi
       - if: steps.exists.outputs.skip != 'true'
-        run: npm publish --provenance --access public
+        run: npm stage publish . --provenance --access public
