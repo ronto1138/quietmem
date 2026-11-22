@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 — 2026-11-22
+
+- README: install from npm, badges. Publish workflow stages releases on npm for a maintainer to approve.
+
 ## 0.2.0 — 2026-11-22
 
 First version on npm: `npm install -g quietmem`.
