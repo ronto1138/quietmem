@@ -30,3 +30,5 @@ CREATE TABLE IF NOT EXISTS index_state (
   baseline_ts  timestamptz,
   updated_at   timestamptz NOT NULL DEFAULT now()
 );
+-- 0.2.0: sessions of a project in index.exclude are tracked (so they are not re-read) but never indexed.
+ALTER TABLE index_state ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;

@@ -18,7 +18,25 @@ Start from [`quietmem.config.example.json`](../quietmem.config.example.json).
 | `QUIETMEM_DATABASE_URL` | Database URL (overrides `database.url`) |
 | `QUIETMEM_EMBEDDER_URL` | Embedder base URL (overrides `embedder.url`) |
 | `QUIETMEM_BUDGET_MS` | Recall budget (overrides `recall.budgetMs`) |
+| `QUIETMEM_PROJECT` | Project the MCP server works for (default: label of the folder it starts in) |
 | `QUIETMEM_DISABLE=1` | quietmem does nothing in this process (used for the distiller's own session) |
+
+## Privacy
+
+Three controls, all by **project label** (see `projects.rules` below for how a session gets one):
+
+- `index.exclude`: labels that are never indexed. Their sessions are tracked so they are not re-read, but
+  no text is stored. Remove a label from the list and the next `quietmem index --sweep` indexes those
+  sessions from the start.
+- `recall.private`: labels whose fragments are recalled only in a session of that same project. Any other
+  project, an unknown project, or an MCP server started elsewhere never sees them. A human at the terminal
+  (`quietmem search`, `quietmem recall`) sees everything; `quietmem recall --project p` simulates a session in p.
+- `recall.scope`: `"all"` (default) recalls across projects; `"project"` only from the current one.
+
+To remove what is already indexed: `quietmem forget --project p` (or `--session id`, `--before YYYY-MM-DD`,
+combinable). It is a dry run until you add `--yes`. Forgotten transcripts are not read again; only lines
+appended later get indexed, so add the label to `index.exclude` if you want nothing new either. Run
+`quietmem tf` afterwards.
 
 ## Sections
 
@@ -42,10 +60,12 @@ re-tune after switching (see [design.md](design.md#tuning-on-your-corpus)).
 
 **`recall`**: `budgetMs`, the gates and the size limits (see [design.md](design.md)). `entities` and
 `entitiesFile` list the names that open the gate: project names, clients, services, tools, people. Matching
-is case- and accent-insensitive; a hyphenated entity also matches its parts. `intentPatterns` replaces the
+is case- and accent-insensitive; a hyphenated entity also matches its parts. With `projectsAsEntities`
+(default `true`), the project labels found by `quietmem tf` count too, except labels that are common words in
+your corpus ("app", "src"). `intentPatterns` replaces the
 built-in "do you remember" regexes (English and Spanish) with your own list.
 
-**`index`**: chunk sizes, `batch` (embeddings per request), `skipSubagents`, and `sources`:
+**`index`**: chunk sizes, `batch` (embeddings per request), `skipSubagents`, `exclude` (see Privacy), and `sources`:
 
 ```json
 "sources": [

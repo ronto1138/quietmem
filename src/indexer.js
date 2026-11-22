@@ -43,13 +43,29 @@ export function parseLines(lines, adapter) {
   return out;
 }
 
+/** Is this project label in index.exclude? Case-insensitive, exact label. */
+export const isExcluded = (cfg, project) =>
+  !!project && (cfg.index.exclude || []).some(e => String(e).toLowerCase() === String(project).toLowerCase());
+
+async function markExcluded(db, sessionId, path, project) {
+  const size = statSync(path).size;
+  await db.query(
+    `INSERT INTO index_state(session_id,path,project,byte_offset,excluded,updated_at) VALUES ($1,$2,$3,$4,true,now())
+     ON CONFLICT (session_id) DO UPDATE SET path=$2, project=$3, byte_offset=$4, excluded=true, updated_at=now()`,
+    [sessionId, path, project, size]);
+  return { session: sessionId, project, reason: 'excluded' };
+}
+
 export async function indexFile(db, cfg, embedder, adapter, rawPath, sessionId = adapter.sessionId(rawPath)) {
   const path = resolve(rawPath);
   if (!existsSync(path)) return { session: sessionId, reason: 'no_file' };
   const { rows: [lock] } = await db.query('SELECT pg_try_advisory_lock(hashtext($1)) ok', [sessionId]);
   if (!lock.ok) return { session: sessionId, reason: 'locked' };
   try {
-    const { rows: [st] } = await db.query('SELECT byte_offset, baseline_ts, project FROM index_state WHERE session_id=$1', [sessionId]);
+    let { rows: [st] } = await db.query('SELECT byte_offset, baseline_ts, project, excluded FROM index_state WHERE session_id=$1', [sessionId]);
+    if (st && isExcluded(cfg, st.project)) return await markExcluded(db, sessionId, path, st.project);
+    // Excluded before, not any more: start this session from the beginning.
+    if (st?.excluded) { await db.query('DELETE FROM index_state WHERE session_id=$1', [sessionId]); st = undefined; }
     let offset = st ? Number(st.byte_offset) : 0;
     let skipBefore = st ? st.baseline_ts : null;
     let project = st?.project || null;
@@ -66,6 +82,7 @@ export async function indexFile(db, cfg, embedder, adapter, rawPath, sessionId =
       if (!project) {
         const withDir = messages.find(m => m.project || m.cwd);
         project = withDir ? (withDir.project || projectOf(withDir.cwd, cfg)) : adapter.fallbackProject(path);
+        if (isExcluded(cfg, project)) return await markExcluded(db, sessionId, path, project);
       }
       const chunks = chunkMessages(messages, cfg.index, skipBefore);
       await db.query('BEGIN');
@@ -82,8 +99,8 @@ export async function indexFile(db, cfg, embedder, adapter, rawPath, sessionId =
           await db.query(`INSERT INTO chunks(source,project,path,session_id,ts,content,embedding) VALUES ${vals.join(',')}`, params);
         }
         await db.query(
-          `INSERT INTO index_state(session_id,path,project,byte_offset,baseline_ts,updated_at) VALUES ($1,$2,$3,$4,$5,now())
-           ON CONFLICT (session_id) DO UPDATE SET path=$2, project=$3, byte_offset=$4, baseline_ts=$5, updated_at=now()`,
+          `INSERT INTO index_state(session_id,path,project,byte_offset,baseline_ts,excluded,updated_at) VALUES ($1,$2,$3,$4,$5,false,now())
+           ON CONFLICT (session_id) DO UPDATE SET path=$2, project=$3, byte_offset=$4, baseline_ts=$5, excluded=false, updated_at=now()`,
           [sessionId, path, project, next, skipBefore]);
         await db.query('COMMIT');
       } catch (e) { await db.query('ROLLBACK').catch(() => {}); throw e; }

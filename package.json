@@ -1,7 +1,17 @@
 {
   "name": "quietmem",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local, precision-first memory for AI coding agents: recalls past conversations only when it is confident they matter.",
+  "author": "Ives Laurent",
+  "license": "MIT",
+  "homepage": "https://github.com/ronto1138/quietmem#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ronto1138/quietmem.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ronto1138/quietmem/issues"
+  },
   "type": "module",
   "bin": {
     "quietmem": "bin/quietmem.js"
@@ -32,7 +42,6 @@
     "ai-agents",
     "local-first"
   ],
-  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "pg": "^8.13.0",

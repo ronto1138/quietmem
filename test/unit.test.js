@@ -131,3 +131,57 @@ test('config: deep merge and masked URLs', () => {
   assert.equal(c.recall.minSimilarity, DEFAULTS.recall.minSimilarity);
   assert.equal(maskUrl('postgresql://quietmem:s3cret@localhost:5433/quietmem'), 'postgresql://quietmem:***@localhost:5433/quietmem');
 });
+
+test('scope: private projects are hidden from other sessions, visible in their own', async () => {
+  const { scopeWhere } = await import('../src/recall.js');
+  const c = merge(DEFAULTS, { recall: { private: ['client-x'] } });
+  let p = [];
+  assert.equal(scopeWhere(c, { sessionId: 's1' }, p), 'session_id IS DISTINCT FROM $1');          // human at the terminal
+  p = [];
+  assert.match(scopeWhere(c, { sessionId: 's1', current: 'acme' }, p), /project <> ALL\(\$2::text\[\]\)/);
+  assert.deepEqual(p[1], ['client-x']);
+  p = [];
+  assert.doesNotMatch(scopeWhere(c, { current: 'client-x' }, p), /ALL/);                        // inside client-x itself
+  p = ['vec'];
+  const only = merge(DEFAULTS, { recall: { scope: 'project' } });
+  assert.equal(scopeWhere(only, { current: null }, p), 'session_id IS DISTINCT FROM $2 AND project = $3');
+  assert.equal(p[2], null);                                                                      // unknown project: nothing
+});
+
+test('entities: project labels count, unless they are common words', async () => {
+  const { loadEntities } = await import('../src/recall.js');
+  const t = { chunks: 10000, projects: { 'acme-api': 50, app: 4000, default: 3 }, df: { app: 2000 } };
+  const e = loadEntities(DEFAULTS, t);
+  assert.ok(e.has('acme-api'));
+  assert.ok(!e.has('app') && !e.has('default'));
+  assert.equal(loadEntities(merge(DEFAULTS, { recall: { projectsAsEntities: false } }), t).size, 0);
+});
+
+test('index: exclusion is by project label, case-insensitive', async () => {
+  const { isExcluded } = await import('../src/indexer.js');
+  const c = merge(DEFAULTS, { index: { exclude: ['Client-X'] } });
+  assert.ok(isExcluded(c, 'client-x'));
+  assert.ok(!isExcluded(c, 'acme') && !isExcluded(c, null));
+});
+
+test('stats: outcomes, injection ratio and latency from the recall log', async () => {
+  const { summarize } = await import('../src/stats.js');
+  const now = Date.parse('2026-11-22T12:00:00Z');
+  const L = (ts, o) => JSON.stringify({ ts, ...o });
+  const log = [
+    L('2026-11-22T10:00:00Z', { ms: 40, injected: 0, reason: 'short' }),
+    L('2026-11-22T10:01:00Z', { ms: 200, injected: 2, ph: { embed: 80, vec: 150 } }),
+    L('2026-11-22T10:02:00Z', { ms: 300, injected: 0, reason: 'no_match', ph: { embed: 90, vec: 250 } }),
+    L('2026-11-22T10:03:00Z', { ms: 501, injected: 0, reason: 'budget', ph: { embed: 400 } }),
+    L('2026-10-01T10:00:00Z', { ms: 10, injected: 1 }),                                          // outside the window
+    'not json',
+  ].join('\n');
+  const s = summarize(log, { days: 7, now });
+  assert.equal(s.total, 4);
+  assert.equal(s.searched, 3);
+  assert.equal(s.injected, 1);
+  assert.equal(s.injectedPct, 25);
+  assert.equal(s.overBudget, 1);
+  assert.equal(s.ms.max, 501);
+  assert.equal(s.phases.embed, 90);
+});

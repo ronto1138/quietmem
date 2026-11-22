@@ -13,19 +13,23 @@ import { connect } from './db.js';
 import { makeEmbedder } from './embedder.js';
 import { redact } from './redact.js';
 import * as R from './recall.js';
+import { projectOf } from './projects.js';
 
 export async function serve(cfg) {
   const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const server = new McpServer({ name: 'quietmem', version });
   const emb = makeEmbedder(cfg);
-  const entities = R.loadEntities(cfg);
   const tf = R.loadTermFrequencies(cfg);
+  const entities = R.loadEntities(cfg, tf);
+  // The project this server works for: QUIETMEM_PROJECT, else the folder the client started it in.
+  // It decides which private projects are visible (recall.private) and the 'project' scope.
+  const current = process.env.QUIETMEM_PROJECT || projectOf(process.cwd(), cfg, null);
   const text = t => ({ content: [{ type: 'text', text: t }] });
 
   async function rowsFor(query, opts) {
     const vec = await emb.query(query.slice(0, 2000));
     const db = await connect(cfg);
-    try { await db.query(R.searchSettings(cfg)); return await R.candidates(db, cfg, vec, opts); }
+    try { await db.query(R.searchSettings(cfg)); return await R.candidates(db, cfg, vec, { ...opts, current }); }
     finally { await db.end().catch(() => {}); }
   }
 

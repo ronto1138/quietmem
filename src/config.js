@@ -45,8 +45,14 @@ export const DEFAULTS = {
     veryRarePct: 0.003,     // "very rare": < 0.3% of chunks
     minDf: 30,              // below this many chunks a term always counts as rare (small corpora)
     entities: [],           // names that open the gate: projects, clients, tools, people
+    projectsAsEntities: true, // project labels in the corpus also open the gate (unless the label is a common word)
     entitiesFile: null,     // optional file, one entity per line, '#' comments
     intentPatterns: null,   // null = built-in English + Spanish "do you remember / what did we decide"
+    // Where fragments may come from. 'all': any project. 'project': only the current session's project.
+    scope: 'all',
+    // Project labels whose fragments are only recalled inside that same project (client work under NDA,
+    // personal notes...). They never show up in another project's session or MCP query.
+    private: [],
   },
   index: {
     chunkChars: 1200,
@@ -56,6 +62,7 @@ export const DEFAULTS = {
     batch: 16,
     skipSubagents: true,    // Claude Code: ignore agent-*.jsonl transcripts
     sources: [],            // [{ adapter: 'claude-code', dir: '~/.claude/projects' }, { adapter: 'jsonl', dir: '...' }]
+    exclude: [],            // project labels never indexed (give a folder a label with projects.rules first)
   },
   // Project label for a transcript: first matching rule on the session's working directory,
   // else the last segment of that directory.

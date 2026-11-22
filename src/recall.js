@@ -39,11 +39,39 @@ export const DEFAULT_INTENT = [
   'd[oó]nde (nos )?quedamos', 'en qu[eé] qued', 'cu[aá]ndo (vimos|hicimos|decidimos)',
 ];
 
-export function loadEntities(cfg) {
+export function loadEntities(cfg, tf = null) {
   const list = [...(cfg.recall.entities || [])];
   const f = cfg.recall.entitiesFile;
   if (f && existsSync(f)) list.push(...readFileSync(f, 'utf8').split('\n').map(l => l.replace(/#.*/, '').trim()));
+  // Project labels found by `quietmem tf` count as entities, unless the label is itself a common word
+  // ("app", "src", "code" would open the gate for almost anything).
+  if (cfg.recall.projectsAsEntities !== false && tf?.projects) {
+    const common = t => (tf.df?.[t] || 0) >= Math.max(cfg.recall.minDf ?? 30, (tf.chunks || 0) * cfg.recall.rarePct);
+    for (const p of Object.keys(tf.projects)) {
+      const n = norm(p).trim();
+      if (n.length >= 3 && n !== 'default' && !common(n)) list.push(n);
+    }
+  }
   return new Set(list.map(e => norm(e).trim()).filter(Boolean));
+}
+
+/**
+ * WHERE clause that decides which projects a query may see. Appends its values to `params`.
+ *   project   explicit filter (CLI or MCP argument)
+ *   current   project of the session asking; undefined = a human at the terminal (no privacy filter),
+ *             null = unknown session (private projects are hidden)
+ */
+export function scopeWhere(cfg, { sessionId, project, current } = {}, params) {
+  const p = v => { params.push(v); return `$${params.length}`; };
+  const w = [`session_id IS DISTINCT FROM ${p(sessionId || null)}`];
+  if (project) w.push(`project = ${p(project)}`);
+  if (current !== undefined) {
+    // Unknown project with scope 'project': `project = NULL` matches nothing, which is the safe answer.
+    if (cfg.recall.scope === 'project') w.push(`project = ${p(current)}`);
+    const priv = (cfg.recall.private || []).filter(x => x !== current);
+    if (priv.length) w.push(`project <> ALL(${p(priv)}::text[])`);
+  }
+  return w.join(' AND ');
 }
 
 export function loadTermFrequencies(cfg) {
@@ -83,20 +111,21 @@ export function prepare(prompt, cfg, { entities, tf }) {
 }
 
 /** Vector + lexical candidates. `vec` is the query embedding. */
-export async function candidates(db, cfg, vec, { sessionId, lexTerms, project }) {
+export async function candidates(db, cfg, vec, { sessionId, lexTerms = [], project, current } = {}) {
   const lit = '[' + vec.join(',') + ']';
-  const where = `session_id IS DISTINCT FROM $2 ${project ? 'AND project = $4' : ''}`;
-  const extra = project ? [project] : [];
+  const params = [lit];
+  const where = scopeWhere(cfg, { sessionId, project, current }, params);
   const { rows } = await db.query(
     `SELECT id, project, to_char(ts,'YYYY-MM-DD') d, 1 - (embedding <=> $1::vector) AS s, content
        FROM chunks WHERE ${where}
-      ORDER BY embedding <=> $1::vector LIMIT $3`, [lit, sessionId || null, cfg.recall.candidates, ...extra]);
+      ORDER BY embedding <=> $1::vector LIMIT ${Number(cfg.recall.candidates) | 0}`, params);
   let all = rows;
   if (lexTerms.length) {
+    const lp = [...params, lexTerms.join(' | ')];
     const { rows: lex } = await db.query(
       `SELECT id, project, to_char(ts,'YYYY-MM-DD') d, 1 - (embedding <=> $1::vector) AS s, content
-         FROM chunks WHERE ${where} AND embedding IS NOT NULL AND ${FTS} @@ to_tsquery('simple', $3)
-        ORDER BY embedding <=> $1::vector LIMIT 10`, [lit, sessionId || null, lexTerms.join(' | '), ...extra]);
+         FROM chunks WHERE ${where} AND embedding IS NOT NULL AND ${FTS} @@ to_tsquery('simple', $${lp.length})
+        ORDER BY embedding <=> $1::vector LIMIT 10`, lp);
     const have = new Set(all.map(r => String(r.id)));
     all = all.concat(lex.filter(r => !have.has(String(r.id))));
   }

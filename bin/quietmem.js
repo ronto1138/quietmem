@@ -20,19 +20,23 @@ const argv = ci >= 0 ? [...raw.slice(0, ci), ...raw.slice(ci + 2)] : raw;
 const cmd = argv[0];
 const flag = n => argv.includes(`--${n}`);
 const opt = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : d; };
-const WITH_VALUE = new Set(['--config', '--adapter', '--session', '--limit', '--project', '--date', '--hook', '--min']);
+const WITH_VALUE = new Set(['--config', '--adapter', '--session', '--limit', '--project', '--date', '--hook', '--min', '--days', '--before']);
 const positional = () => argv.slice(1).filter((a, i, all) => !a.startsWith('--') && !WITH_VALUE.has(all[i - 1]));
 
 const { loadConfig, maskUrl } = await import('../src/config.js');
 const cfg = loadConfig({ file: CONFIG_FILE });
 const readStdin = () => { try { return JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch { return null; } };
 
-const HELP = `quietmem — local, precision-first memory for AI coding agents
+const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
+if (cmd === '--version' || cmd === '-v' || cmd === 'version') { console.log(VERSION); process.exit(0); }
+
+const HELP = `quietmem ${VERSION} — local, precision-first memory for AI coding agents
 
 Setup
+  quietmem setup [--hooks]              first run: config, schema, index, term frequencies (and hooks)
   quietmem init                         create tables and indexes (needs pgvector)
   quietmem doctor                       check config, database and embedder; time each recall phase
-  quietmem install claude-code [--write] print (or merge into ~/.claude/settings.json) the hooks
+  quietmem install claude-code [--write | --remove]   print, merge or remove the Claude Code hooks
 
 Indexing
   quietmem index --sweep                index everything new in the configured sources
@@ -46,11 +50,15 @@ Recall
   quietmem search "text" [--limit n] [--project p]   plain semantic search, no gates
   quietmem mcp                          MCP server over stdio (search_memory, recall_memory)
 
+Your data
+  quietmem stats [--days n] [--json]    how often recall searched, injected or stayed quiet, and how fast
+  quietmem forget --session id | --project p | --before YYYY-MM-DD [--yes]   delete indexed chunks
+
 Proposals
   quietmem distill [--date YYYY-MM-DD] [--project p] [--force]
   quietmem proposals expire [--dry-run]
 
-Options: --config <file>. Config: $QUIETMEM_CONFIG, ./quietmem.config.json or ~/.quietmem/config.json.
+Options: --config <file>, --version. Config: $QUIETMEM_CONFIG, ./quietmem.config.json or ~/.quietmem/config.json.
 `;
 
 // ---------------------------------------------------------------- recall (hook)
@@ -82,7 +90,10 @@ async function recallHook(adapterName) {
   const adapter = getAdapter(adapterName);
   const { prompt, sessionId, cwd } = adapter.promptEvent(ev);
   const R = await import('../src/recall.js');
-  const q = R.prepare(prompt, cfg, { entities: R.loadEntities(cfg), tf: R.loadTermFrequencies(cfg) });
+  const { projectOf } = await import('../src/projects.js');
+  const current = cwd ? projectOf(cwd, cfg) : null;
+  const tf = R.loadTermFrequencies(cfg);
+  const q = R.prepare(prompt, cfg, { entities: R.loadEntities(cfg, tf), tf });
   if (q.stop) bail(q.stop);
 
   const { makeEmbedder } = await import('../src/embedder.js');
@@ -98,7 +109,7 @@ async function recallHook(adapterName) {
   } catch (e) { bail('prep_fail', { err: e.code || e.name, ph }); }
 
   let rows;
-  try { rows = await R.candidates(db, cfg, vec, { sessionId, lexTerms: q.lexTerms }); mark('query'); db.end().catch(() => {}); }
+  try { rows = await R.candidates(db, cfg, vec, { sessionId, lexTerms: q.lexTerms, current }); mark('query'); db.end().catch(() => {}); }
   catch (e) { bail('db_fail', { err: e.code || e.name, ph }); }
 
   const picked = R.pick(rows, cfg, q);
@@ -148,8 +159,10 @@ const commands = {
     const emb = makeEmbedder(cfg);
     await withDb(async db => {
       if (flag('sweep')) {
-        const { rows } = await db.query('SELECT session_id, byte_offset FROM index_state');
-        const seen = new Map(rows.map(r => [r.session_id, Number(r.byte_offset)]));
+        const { isExcluded } = await import('../src/indexer.js');
+        const { rows } = await db.query('SELECT session_id, byte_offset, project, excluded FROM index_state');
+        // A session excluded before whose project is no longer excluded must be read again from the start.
+        const seen = new Map(rows.filter(r => !(r.excluded && !isExcluded(cfg, r.project))).map(r => [r.session_id, Number(r.byte_offset)]));
         let files = 0, chunks = 0, errors = 0;
         for (const s of listSources(cfg, getAdapter)) {
           const sid = s.adapter.sessionId(s.path);
@@ -174,12 +187,14 @@ const commands = {
     if (flag('hook')) return recallHook(opt('hook'));
     const prompt = positional().join(' ');
     const R = await import('../src/recall.js');
-    const q = R.prepare(prompt, cfg, { entities: R.loadEntities(cfg), tf: R.loadTermFrequencies(cfg) });
+    if (!prompt) throw new Error('usage: quietmem recall "text" [--debug] [--project p]');
+    const tf = R.loadTermFrequencies(cfg);
+    const q = R.prepare(prompt, cfg, { entities: R.loadEntities(cfg, tf), tf });
     if (q.stop) { console.log(`no recall: ${q.stop}`); return; }
     console.error(`terms=${[...q.qTerms].join(',')} named=${q.named.join(',')} intent=${q.intent} lex=${q.lexTerms.join(',')}`);
     const { makeEmbedder } = await import('../src/embedder.js');
     const vec = await makeEmbedder(cfg).query(prompt.slice(0, 2000));
-    const rows = await withDb(async db => { await db.query(R.searchSettings(cfg)); return R.candidates(db, cfg, vec, { lexTerms: q.lexTerms }); });
+    const rows = await withDb(async db => { await db.query(R.searchSettings(cfg)); return R.candidates(db, cfg, vec, { lexTerms: q.lexTerms, ...(opt('project') ? { current: opt('project') } : {}) }); });
     const picked = R.pick(rows, cfg, q, flag('debug') ? m => console.error(m) : null);
     console.log(picked.length ? R.render(picked, cfg).text : 'no recall: no_match');
   },
@@ -198,13 +213,19 @@ const commands = {
   async tf() {
     const { terms } = await import('../src/terms.js');
     const MIN_KEEP = Number(opt('min', 30));
-    const rows = await withDb(async db => { await db.query('SET statement_timeout = 0'); return (await db.query('SELECT content FROM chunks')).rows; });
+    let projects = {};
+    const rows = await withDb(async db => {
+      await db.query('SET statement_timeout = 0');
+      const { rows: pr } = await db.query('SELECT project, count(*)::int n FROM chunks GROUP BY project ORDER BY 2 DESC');
+      projects = Object.fromEntries(pr.map(r => [r.project, r.n]));
+      return (await db.query('SELECT content FROM chunks')).rows;
+    });
     const df = new Map();
     for (const { content } of rows) for (const t of terms(content)) df.set(t, (df.get(t) || 0) + 1);
     const kept = Object.fromEntries([...df].filter(([, n]) => n >= MIN_KEEP).sort((a, b) => b[1] - a[1]));
     mkdirSync(cfg.dataDir, { recursive: true });
-    writeFileSync(join(cfg.dataDir, 'term-frequencies.json'), JSON.stringify({ built: new Date().toISOString(), chunks: rows.length, min_keep: MIN_KEEP, df: kept }));
-    console.log(`chunks=${rows.length} vocabulary=${df.size} kept(df>=${MIN_KEEP})=${Object.keys(kept).length}`);
+    writeFileSync(join(cfg.dataDir, 'term-frequencies.json'), JSON.stringify({ built: new Date().toISOString(), chunks: rows.length, min_keep: MIN_KEEP, projects, df: kept }));
+    console.log(`chunks=${rows.length} projects=${Object.keys(projects).length} vocabulary=${df.size} kept(df>=${MIN_KEEP})=${Object.keys(kept).length}`);
   },
 
   async warm() {
@@ -234,8 +255,8 @@ const commands = {
     const R = await import('../src/recall.js');
     const tf = R.loadTermFrequencies(cfg);
     tf ? ok(`term frequencies: ${tf.chunks} chunks (built ${tf.built.slice(0, 10)})`) : bad('no term frequencies yet: run `quietmem tf` after indexing');
-    const ents = R.loadEntities(cfg);
-    ents.size ? ok(`${ents.size} entities`) : console.log('  warn  no entities configured: recall gate is looser (see docs/configuration.md)');
+    const ents = R.loadEntities(cfg, tf);
+    ents.size ? ok(`${ents.size} entities (configured and project labels)`) : console.log('  warn  no entities configured: recall gate is looser (see docs/configuration.md)');
     const { makeEmbedder } = await import('../src/embedder.js');
     const { connect } = await import('../src/db.js');
     const emb = makeEmbedder(cfg);
@@ -243,13 +264,17 @@ const commands = {
     try { let a = performance.now(); vec = await emb.query('quietmem doctor probe'); const cold = performance.now() - a;
       a = performance.now(); await emb.query('quietmem doctor probe two'); ok(`embedder: ${vec.length} dims, first ${Math.round(cold)} ms, warm ${Math.round(performance.now() - a)} ms`);
       if (vec.length !== Number(cfg.embedder.dimensions)) bad(`embedder returns ${vec.length} dims but config says ${cfg.embedder.dimensions}`);
-    } catch (e) { bad(`embedder: ${e.message}`); return; }
+    } catch (e) {
+      bad(`embedder: ${errMsg(e)}`);
+      if (cfg.embedder.provider === 'ollama') console.log(`        is Ollama running, and is the model pulled? ollama pull ${cfg.embedder.model}`);
+    }
     let db;
     try { const a = performance.now(); db = await connect(cfg); await db.query(R.searchSettings(cfg)); ok(`database connect: ${Math.round(performance.now() - a)} ms`); }
-    catch (e) { bad(`database: ${e.message}`); return; }
+    catch (e) { bad(`database: ${errMsg(e)}`); const h = hint(e); if (h) console.log(`        ${h}`); return; }
     try {
       const { rows: [n] } = await db.query('SELECT count(*)::int n FROM chunks');
       ok(`${n.n} chunks indexed`);
+      if (!vec) return;
       const lit = '[' + vec.join(',') + ']';
       const sql = 'SELECT id FROM chunks ORDER BY embedding <=> $1::vector LIMIT 30';
       for (const run of [1, 2]) {
@@ -261,19 +286,112 @@ const commands = {
       }
       const { rows: [sz] } = await db.query(`SELECT pg_size_pretty(pg_relation_size('chunks_embedding_idx')) idx, current_setting('shared_buffers') sb`);
       console.log(`  info  vector index ${sz.idx}, shared_buffers ${sz.sb}: if the index does not fit, cold queries read from disk (docs/performance.md)`);
-    } catch (e) { bad(`query: ${e.message}`); }
+    } catch (e) { bad(`query: ${errMsg(e)}`); }
     finally { await db.end().catch(() => {}); }
-    console.log(`recall budget: ${cfg.recall.budgetMs} ms`);
+    console.log(`recall budget: ${cfg.recall.budgetMs} ms · scope: ${cfg.recall.scope}` +
+      (cfg.recall.private.length ? ` · private: ${cfg.recall.private.join(', ')}` : '') +
+      (cfg.index.exclude.length ? ` · never indexed: ${cfg.index.exclude.join(', ')}` : ''));
   },
 
   async install() {
-    if (argv[1] !== 'claude-code') throw new Error('usage: quietmem install claude-code [--write]');
+    if (argv[1] !== 'claude-code') throw new Error('usage: quietmem install claude-code [--write | --remove]');
+    await installClaudeCode({ write: flag('write'), remove: flag('remove') });
+  },
+
+  async stats() {
+    const { summarize } = await import('../src/stats.js');
+    const file = join(cfg.dataDir, 'recall.log.jsonl');
+    if (!existsSync(file)) { console.log(`no recall log yet (${file}): it fills as the hooks run`); return; }
+    const s = summarize(readFileSync(file, 'utf8'), { days: Number(opt('days', 7)) });
+    if (flag('json')) { console.log(JSON.stringify(s, null, 2)); return; }
+    console.log(`last ${s.days} days: ${s.total} prompts, ${s.searched} searched, ${s.injected} injected ` +
+      `(${s.injectedPct}% of prompts, ${s.injectedOfSearchedPct}% of searches)`);
+    console.log('outcomes:   ' + Object.entries(s.reasons).map(([k, v]) => `${k} ${v}`).join(' · '));
+    if (s.searched) {
+      console.log(`latency:    p50 ${s.ms.p50} ms · p90 ${s.ms.p90} ms · max ${s.ms.max} ms · over budget ${s.overBudget}`);
+      console.log('phases p50: ' + Object.entries(s.phases).map(([k, v]) => `${k} ${v}`).join(' · ') + '  (ms since start)');
+    }
+  },
+
+  async forget() {
+    const session = opt('session'), project = opt('project'), before = opt('before');
+    if (!session && !project && !before) throw new Error('usage: quietmem forget --session id | --project p | --before YYYY-MM-DD [--yes]');
+    if (before && !/^\d{4}-\d\d-\d\d$/.test(before)) throw new Error('--before must be YYYY-MM-DD');
+    const params = [], where = [];
+    const add = (sql, v) => { params.push(v); where.push(sql.replace('?', `$${params.length}`)); };
+    if (session) add('session_id = ?', session);
+    if (project) add('project = ?', project);
+    if (before) add('ts < ?::date', before);
+    const w = where.join(' AND ');
+    await withDb(async db => {
+      const { rows: [c] } = await db.query(`SELECT count(*)::int n, count(DISTINCT session_id)::int s FROM chunks WHERE ${w}`, params);
+      if (!flag('yes')) { console.log(`would delete ${c.n} chunks from ${c.s} sessions. Rerun with --yes to delete them.`); return; }
+      await db.query(`DELETE FROM chunks WHERE ${w}`, params);
+      console.log(`deleted ${c.n} chunks from ${c.s} sessions.`);
+      // index_state stays on purpose: those transcripts are not read again, only lines appended later.
+      if (project) {
+        const { isExcluded } = await import('../src/indexer.js');
+        if (!isExcluded(cfg, project)) console.log(`new sessions of "${project}" will still be indexed: add it to index.exclude to stop that.`);
+      }
+      console.log('run `quietmem tf` to refresh term frequencies.');
+    });
+  },
+
+  async setup() {
+    const { homedir } = await import('node:os');
+    console.log(`quietmem ${VERSION} setup\n`);
+    if (cfg.path) console.log(`1. config: ${cfg.path}`);
+    else {
+      const p = join(homedir(), '.quietmem', 'config.json');
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, JSON.stringify({
+        index: { sources: [{ adapter: 'claude-code', dir: '~/.claude/projects' }], exclude: [] },
+        recall: { entities: [], private: [] },
+        projects: { rules: [] },
+      }, null, 2) + '\n');
+      console.log(`1. config: created ${p} (edit it later: entities, private projects, exclusions)`);
+    }
+    const { connect } = await import('../src/db.js');
+    try { const db = await connect(cfg); await db.end(); console.log(`2. database: ${maskUrl(cfg.database.url)} ok`); }
+    catch (e) {
+      console.log(`2. database: ${maskUrl(cfg.database.url)} FAILED: ${errMsg(e)}`);
+      console.log(`   ${hint(e) || 'check QUIETMEM_DATABASE_URL'}`);
+      console.log('   To start one, in the quietmem folder:');
+      console.log('     export QUIETMEM_DB_PASSWORD="$(openssl rand -hex 16)" && docker compose up -d');
+      console.log('     export QUIETMEM_DATABASE_URL="postgresql://quietmem:${QUIETMEM_DB_PASSWORD}@localhost:5433/quietmem"');
+      process.exitCode = 1; return;
+    }
+    const { makeEmbedder } = await import('../src/embedder.js');
+    try {
+      const v = await makeEmbedder(cfg).query('quietmem setup');
+      console.log(`3. embedder: ${cfg.embedder.model}, ${v.length} dimensions ok`);
+      if (v.length !== Number(cfg.embedder.dimensions)) {
+        console.log(`   but embedder.dimensions is ${cfg.embedder.dimensions}: fix the config first`);
+        process.exitCode = 1; return;
+      }
+    } catch (e) {
+      console.log(`3. embedder: FAILED: ${errMsg(e)}`);
+      if (cfg.embedder.provider === 'ollama') console.log(`   install Ollama (https://ollama.com), then: ollama pull ${cfg.embedder.model}`);
+      process.exitCode = 1; return;
+    }
+    process.stdout.write('4. schema: '); await commands.init();
+    process.stdout.write('5. index: '); argv.push('--sweep'); await commands.index();
+    process.stdout.write('6. term frequencies: '); await commands.tf();
+    if (flag('hooks')) { process.stdout.write('7. hooks: '); await installClaudeCode({ write: true }); }
+    else console.log('7. hooks: run `quietmem install claude-code --write` for automatic recall in Claude Code (MCP clients: see README)');
+    console.log('\nDone. Try: quietmem recall "what did we decide about <something you worked on>" --debug');
+  },
+
+  async mcp() { await import('../src/mcp.js').then(m => m.serve(cfg)); },
+};
+
+async function installClaudeCode({ write = false, remove = false } = {}) {
     const cmdLine = `node "${SELF.replace(/\\/g, '/')}"`;
     const hooks = {
       UserPromptSubmit: [{ hooks: [{ type: 'command', command: `${cmdLine} recall --hook claude-code`, timeout: 5 }] }],
       Stop: [{ hooks: [{ type: 'command', command: `${cmdLine} index --hook claude-code`, timeout: 5 }] }],
     };
-    if (!flag('write')) { console.log(JSON.stringify({ hooks }, null, 2)); console.error('\nAdd this to ~/.claude/settings.json, or rerun with --write to merge it.'); return; }
+    if (!write && !remove) { console.log(JSON.stringify({ hooks }, null, 2)); console.error('\nAdd this to ~/.claude/settings.json, or rerun with --write to merge it.'); return; }
     const { homedir } = await import('node:os');
     const p = join(homedir(), '.claude', 'settings.json');
     const s = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {};
@@ -281,17 +399,27 @@ const commands = {
     s.hooks = s.hooks || {};
     for (const [ev, entries] of Object.entries(hooks)) {
       const cur = (s.hooks[ev] || []).filter(e => !JSON.stringify(e).includes(' recall --hook claude-code') && !JSON.stringify(e).includes(' index --hook claude-code'));
-      s.hooks[ev] = [...cur, ...entries];
+      s.hooks[ev] = remove ? cur : [...cur, ...entries];
+      if (!s.hooks[ev].length) delete s.hooks[ev];
     }
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
-    console.log(`hooks written to ${p} (backup: settings.json.bak-quietmem)`);
-  },
+    console.log(`hooks ${remove ? 'removed from' : 'written to'} ${p} (backup: settings.json.bak-quietmem)`);
+}
+// Node reports a refused connection to both ::1 and 127.0.0.1 as an AggregateError with an empty message.
+const errMsg = e => e?.message || e?.errors?.map(x => x.message).filter(Boolean).join('; ') || e?.code || String(e);
 
-  async mcp() { await import('../src/mcp.js').then(m => m.serve(cfg)); },
-};
+// One-line advice for the errors people hit first.
+function hint(e) {
+  const m = errMsg(e) + ' ' + (e?.code || '') + ' ' + (e?.errors?.map(x => x.code).join(' ') || '');
+  if (/password authentication failed|28P01/.test(m)) return 'the database rejected the login: QUIETMEM_DATABASE_URL must carry the same QUIETMEM_DB_PASSWORD the database was created with';
+  if (/ECONNREFUSED/.test(m)) return 'nothing is listening there: is the database running? (docker compose up -d in the quietmem folder)';
+  if (/relation "(chunks|index_state)" does not exist|42P01/.test(m)) return 'no schema yet: run `quietmem init` (or `quietmem setup`)';
+  if (/type "vector" does not exist|extension "vector"/.test(m)) return 'this Postgres lacks pgvector: use the pgvector/pgvector image from docker-compose.yml';
+  return null;
+}
 
 const run = commands[cmd] || (cmd ? null : commands.help);
 if (!run) { console.error(`unknown command "${cmd}"\n\n${HELP}`); process.exit(2); }
 try { await run(); }
-catch (e) { console.error(`quietmem ${cmd}: ${e.message}`); process.exit(1); }
+catch (e) { const h = hint(e); console.error(`quietmem ${cmd}: ${errMsg(e)}${h ? `\n  ${h}` : ''}`); process.exit(1); }
