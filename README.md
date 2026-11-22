@@ -1,5 +1,7 @@
 # quietmem
 
+[![npm](https://img.shields.io/npm/v/quietmem)](https://www.npmjs.com/package/quietmem) [![ci](https://github.com/ronto1138/quietmem/actions/workflows/ci.yml/badge.svg)](https://github.com/ronto1138/quietmem/actions/workflows/ci.yml) [![license](https://img.shields.io/npm/l/quietmem)](LICENSE)
+
 **Local, precision-first memory for AI coding agents.** quietmem indexes your past conversations with your
 agents and, when a new message clearly relates to something you discussed before, quietly hands the
 relevant fragments to the model. When it is not confident, it injects nothing.
@@ -44,9 +46,11 @@ happens on your machine.
 Requirements: Node 20+, Docker (or any Postgres 15+ with pgvector), and [Ollama](https://ollama.com).
 
 ```bash
-git clone https://github.com/ronto1138/quietmem && cd quietmem && npm install -g .
+npm install -g quietmem
 ollama pull nomic-embed-text:v1.5
 
+# the database: docker-compose.yml ships with the package
+cd "$(npm root -g)/quietmem"
 export QUIETMEM_DB_PASSWORD="$(openssl rand -hex 16)"
 docker compose up -d
 export QUIETMEM_DATABASE_URL="postgresql://quietmem:${QUIETMEM_DB_PASSWORD}@localhost:5433/quietmem"
@@ -56,7 +60,7 @@ quietmem doctor          # checks everything and times each phase
 ```
 
 Keep both variables in your shell profile (not in a config file), so the password never lands in a file
-you might share. Once quietmem is on npm, `npm install -g quietmem` replaces the clone.
+you might share. To hack on it instead: `git clone https://github.com/ronto1138/quietmem && cd quietmem && npm install -g .`
 
 Then tell it the names that matter to you (`recall.entities` in `~/.quietmem/config.json`): clients,
 services, tools, people. Project labels already count. Entities are what open the gate.
@@ -129,7 +133,7 @@ being asked and without noise. It is not a knowledge base or an agent framework.
 
 ```bash
 quietmem install claude-code --remove   # take the hooks out of ~/.claude/settings.json (keeps a backup)
-docker compose down -v                  # in the quietmem folder: delete the database and its volume
+docker compose down -v                  # in "$(npm root -g)/quietmem": delete the database and its volume
 rm -rf ~/.quietmem                      # config, logs, term frequencies, proposals
 npm uninstall -g quietmem
 ```

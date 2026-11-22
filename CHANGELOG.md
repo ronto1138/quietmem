@@ -2,6 +2,8 @@
 
 ## 0.2.0 — 2026-11-22
 
+First version on npm: `npm install -g quietmem`.
+
 - **Privacy controls**: `index.exclude` (never index a project), `recall.private` (recall a project only
   inside itself), `recall.scope: "project"`, and `quietmem forget` (by session, project or date; dry run
   by default). The MCP server applies them using the folder it starts in or `QUIETMEM_PROJECT`.
