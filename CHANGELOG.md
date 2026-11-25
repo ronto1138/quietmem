@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 — 2026-11-25
 
 - **Indexing skips repeats within a session.** A scheduled prompt (a `/loop` or cron watcher) sends the same
   message every few minutes; one real session stored 717 copies of one chunk, which crowded out recall.
