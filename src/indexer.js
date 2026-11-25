@@ -84,7 +84,15 @@ export async function indexFile(db, cfg, embedder, adapter, rawPath, sessionId =
         project = withDir ? (withDir.project || projectOf(withDir.cwd, cfg)) : adapter.fallbackProject(path);
         if (isExcluded(cfg, project)) return await markExcluded(db, sessionId, path, project);
       }
-      const chunks = chunkMessages(messages, cfg.index, skipBefore);
+      // No repeats within a session: a scheduled prompt (a /loop or cron watcher) sends the same message every
+      // few minutes, and one real session reached 717 copies of one chunk, which crowded out recall. Skip what
+      // the session already has and what repeats inside this block; neither is embedded.
+      const all = chunkMessages(messages, cfg.index, skipBefore);
+      const { rows: have } = all.length ? await db.query(
+        'SELECT DISTINCT content FROM chunks WHERE session_id = $1 AND content = ANY($2::text[])',
+        [sessionId, all.map(c => c.content)]) : { rows: [] };
+      const seen = new Set(have.map(r => r.content));
+      const chunks = all.filter(c => !seen.has(c.content) && seen.add(c.content));
       await db.query('BEGIN');
       try {
         for (let i = 0; i < chunks.length; i += cfg.index.batch) {

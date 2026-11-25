@@ -17,6 +17,20 @@ export function pendingFor(outDir, project) {
     .reduce((a, f) => a + countPending(readFileSync(join(outDir, f), 'utf8')), 0);
 }
 
+// Pending proposals per project, with how close each is to maxPending. At the cap the nightly run skips the
+// project silently (recall keeps working; only new proposals stop), so warn from two thirds of the way.
+export function status(outDir, maxPending) {
+  if (!existsSync(outDir)) return [];
+  const by = {};
+  for (const f of readdirSync(outDir)) {
+    const m = f.match(/^\d{4}-\d\d-\d\d-(.+)\.md$/);
+    if (m) by[m[1]] = (by[m[1]] || 0) + countPending(readFileSync(join(outDir, f), 'utf8'));
+  }
+  const near = Math.ceil(maxPending * 2 / 3);
+  return Object.entries(by).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])
+    .map(([project, pending]) => ({ project, pending, level: pending >= maxPending ? 'full' : pending >= near ? 'near' : 'ok' }));
+}
+
 export function expire(outDir, { days, today = new Date(), dryRun = false }) {
   if (!existsSync(outDir)) return [];
   const limit = new Date(today.getTime() - days * 86400000).toISOString().slice(0, 10);

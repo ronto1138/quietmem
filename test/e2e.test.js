@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,6 +57,11 @@ test('e2e: index, exclusion, private projects, recall, forget, stats', { skip: !
       ['user', 'Client X confidential: the zorvantil retries contract pays per retry and the backoff must stay hidden from them.'],
       ['assistant', 'Understood, client X zorvantil retries stay confidential, backoff details only in the private repository.'],
     ]));
+    // A scheduled watcher: the same prompt and answer arrive again and again, each run indexed on its own.
+    const tick = day => ['user', 'assistant'].map(role => JSON.stringify({ role, ts: `2026-11-2${day}T10:00:00Z`, cwd: '/work/acme',
+      content: role === 'user' ? 'Scheduled watcher run: check the acme incident queue and report anything new since the previous run, in one line.'
+        : 'Watcher report for acme: the incident queue has nothing new since the previous run; checking again at the next interval.' })).join('\n') + '\n';
+    writeFileSync(join(src, 's-watch.jsonl'), tick(1));
     writeFileSync(join(src, 's-secret.jsonl'), session('/work/secret-proj', [
       ['user', 'This secret project must never be indexed: zorvantil retries backoff details for the secret project only.'],
       ['assistant', 'Agreed, nothing from the secret project about zorvantil retries should ever be stored anywhere at all.'],
@@ -94,6 +99,9 @@ test('e2e: index, exclusion, private projects, recall, forget, stats', { skip: !
     const [ex] = await psql(`SELECT excluded FROM index_state WHERE session_id = 's-secret'`);
     assert.equal(ex.excluded, true);
     assert.match(await q(['index', '--sweep']), /0 transcripts with news/);               // nothing re-read
+    for (const day of [2, 3]) { appendFileSync(join(src, 's-watch.jsonl'), tick(day)); await q(['index', '--sweep']); }
+    const [w] = await psql(`SELECT count(*)::int n, count(DISTINCT content)::int u FROM chunks WHERE session_id = 's-watch'`);
+    assert.ok(w.n > 0 && w.n === w.u, `repeated watcher runs were stored more than once: ${JSON.stringify(w)}`);
 
     assert.match(await q(['tf']), /projects=2/);
     const ask = (cwd, session_id = 'now') => q(['recall', '--hook', 'jsonl'],
