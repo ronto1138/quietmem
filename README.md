@@ -112,6 +112,7 @@ labels). Logs hold counts and timings only, never prompt or fragment text. See
 | `quietmem forget ... [--yes]` | Delete indexed chunks by session, project or date (dry run without `--yes`) |
 | `quietmem mcp` | MCP server over stdio |
 | `quietmem distill [--date d] [--project p]` | Propose memories from a day of conversation |
+| `quietmem proposals status` | Pending proposals per project, and which are near or at `maxPending` |
 | `quietmem proposals expire` | Move stale pending proposals to `expired/` |
 | `quietmem install claude-code [--write \| --remove]` | Print, merge or remove the Claude Code hooks |
 

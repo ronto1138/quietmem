@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Indexing skips repeats within a session.** A scheduled prompt (a `/loop` or cron watcher) sends the same
+  message every few minutes; one real session stored 717 copies of one chunk, which crowded out recall.
+  Chunks the session already has, and repeats inside a block, are neither embedded nor stored. Existing
+  databases can drop old repeats with:
+  `DELETE FROM chunks c USING chunks d WHERE c.session_id = d.session_id AND c.content = d.content AND c.id > d.id;`
+- **`database.efSearch` default 40 → 100.** Measured on 58k chunks against an exact scan: 40 found 85% of the
+  true top 30, 100 found 92–95%, still at 15–40 ms. Numbers and the IVFFlat comparison in `docs/performance.md`.
+- **`quietmem proposals status`**: pending proposals per project, flagged near (two thirds) or at
+  `maxPending`. At the cap the nightly run skips the project without saying so; `doctor` now warns too.
+
 ## 0.2.1 — 2026-11-22
 
 - README: install from npm, badges. Publish workflow stages releases on npm for a maintainer to approve.

@@ -242,7 +242,15 @@ const commands = {
   },
 
   async proposals() {
-    if (argv[1] !== 'expire') throw new Error('usage: quietmem proposals expire [--dry-run]');
+    if (argv[1] === 'status') {
+      const { status } = await import('../src/proposals.js');
+      const rows = status(cfg.distill.outDir, cfg.distill.maxPending);
+      if (!rows.length) return console.log('no pending proposals');
+      const tag = { full: `FULL: no new proposals until reviewed`, near: 'near the cap', ok: '' };
+      for (const r of rows) console.log(`${r.project.padEnd(24)} ${String(r.pending).padStart(3)}/${cfg.distill.maxPending}  ${tag[r.level]}`);
+      return;
+    }
+    if (argv[1] !== 'expire') throw new Error('usage: quietmem proposals status | quietmem proposals expire [--dry-run]');
     const { expire } = await import('../src/proposals.js');
     const moved = expire(cfg.distill.outDir, { days: cfg.distill.expireDays, dryRun: flag('dry-run') });
     console.log(`${flag('dry-run') ? '[dry run] ' : ''}${moved.length} files expired, ${moved.reduce((a, m) => a + m.pending, 0)} proposals`);
@@ -257,6 +265,9 @@ const commands = {
     tf ? ok(`term frequencies: ${tf.chunks} chunks (built ${tf.built.slice(0, 10)})`) : bad('no term frequencies yet: run `quietmem tf` after indexing');
     const ents = R.loadEntities(cfg, tf);
     ents.size ? ok(`${ents.size} entities (configured and project labels)`) : console.log('  warn  no entities configured: recall gate is looser (see docs/configuration.md)');
+    const { status: pstatus } = await import('../src/proposals.js');
+    for (const r of pstatus(cfg.distill.outDir, cfg.distill.maxPending).filter(r => r.level !== 'ok'))
+      console.log(`  warn  ${r.project}: ${r.pending}/${cfg.distill.maxPending} pending proposals${r.level === 'full' ? ', distill skips it until they are reviewed' : ', near the cap'}`);
     const { makeEmbedder } = await import('../src/embedder.js');
     const { connect } = await import('../src/db.js');
     const emb = makeEmbedder(cfg);

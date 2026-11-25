@@ -9,7 +9,7 @@ import { projectOf } from '../src/projects.js';
 import claudeCode from '../src/adapters/claude-code.js';
 import jsonl from '../src/adapters/jsonl.js';
 import { parseProposals, renderProposals } from '../src/distill.js';
-import { countPending } from '../src/proposals.js';
+import { countPending, status } from '../src/proposals.js';
 
 const cfg = merge(DEFAULTS, { recall: { entities: ['acme-api', 'zorvantil'] } });
 const tf = { chunks: 10000, df: { memory: 900, deploy: 400, staging: 20, migration: 350, importer: 120 } };
@@ -184,4 +184,23 @@ test('stats: outcomes, injection ratio and latency from the recall log', async (
   assert.equal(s.overBudget, 1);
   assert.equal(s.ms.max, 501);
   assert.equal(s.phases.embed, 90);
+});
+
+test('proposals: status counts pending per project and flags near and full', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'quietmem-prop-'));
+  const p = n => Array.from({ length: n }, () => '**Decision:** pending').join('\n\n');
+  writeFileSync(join(dir, '2026-11-20-acme.md'), p(9));
+  writeFileSync(join(dir, '2026-11-21-acme.md'), p(6) + '\n\n**Decision:** accepted');
+  writeFileSync(join(dir, '2026-11-21-beta.md'), p(10));
+  writeFileSync(join(dir, '2026-11-21-gamma.md'), p(2));
+  writeFileSync(join(dir, '2026-11-21-done.md'), '**Decision:** rejected');
+  assert.deepEqual(status(dir, 15), [
+    { project: 'acme', pending: 15, level: 'full' },
+    { project: 'beta', pending: 10, level: 'near' },
+    { project: 'gamma', pending: 2, level: 'ok' },
+  ]);
+  assert.deepEqual(status(join(dir, 'missing'), 15), []);
 });

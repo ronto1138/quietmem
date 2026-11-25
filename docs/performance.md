@@ -27,6 +27,23 @@ pressure).
   keep `shared_buffers` comfortably above it.
 - To warm it by hand: `SELECT pg_prewarm('chunks_embedding_idx');`
 
+## HNSW over IVFFlat, and `efSearch`
+
+On a 57,830-chunk corpus (768 dims) we measured 30 queries against an exact scan:
+
+| Index | Share of the true top 30 found | Warm query |
+|---|---|---|
+| IVFFlat, `lists=100`, `probes=10` | 84% | 80–100 ms |
+| HNSW, `ef_search=40` | 85% | 10–30 ms |
+| HNSW, `ef_search=100` (default since 0.2.2) | 92–95% | 15–40 ms |
+| HNSW, `ef_search=200` | 96–97% | 20–55 ms |
+
+IVFFlat also has to be rebuilt as the corpus grows: its centroids are fixed at build time. HNSW updates on
+insert. A rebuild of HNSW is only worth it after deleting or reloading a large share of rows:
+`REINDEX INDEX CONCURRENTLY chunks_embedding_idx` keeps recall working while it runs. Building it on 58k
+chunks took about 6 minutes with `maintenance_work_mem=1GB`; with the default 64 MB it is much slower.
+After a large delete, run `VACUUM ANALYZE chunks`: until then, queries can miss the latency budget.
+
 ## The embedding model must stay loaded
 
 Ollama unloads idle models; loading one takes seconds, far over budget. quietmem asks Ollama to keep the model

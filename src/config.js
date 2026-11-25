@@ -17,7 +17,7 @@ export const DEFAULTS = {
   database: {
     url: 'postgresql://quietmem:quietmem@localhost:5433/quietmem',
     index: 'hnsw',          // 'hnsw' (default) or 'ivfflat'
-    efSearch: 40,           // hnsw.ef_search
+    efSearch: 100,          // hnsw.ef_search; 40 found 85% of the true top 30 on a 58k-chunk corpus, 100 found 92–95% (docs/performance.md)
     probes: 10,             // ivfflat.probes
   },
   embedder: {
