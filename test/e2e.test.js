@@ -19,10 +19,10 @@ const URL_ = process.env.QUIETMEM_TEST_DATABASE_URL;
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'quietmem.js');
 const DIMS = 64;
 
-// Bag-of-words embedder that speaks the Ollama API: texts that share words are close.
+// Bag-of-words embedder that speaks the Ollama API: texts that share words (or CJK characters) are close.
 function embed(text) {
   const v = new Array(DIMS).fill(0);
-  for (const w of String(text).toLowerCase().replace(/^search_(query|document): /, '').match(/[a-z0-9]{3,}/g) || []) {
+  for (const w of String(text).toLowerCase().replace(/^search_(query|document): /, '').match(/\p{sc=Han}|[\p{L}\p{N}]{3,}/gu) || []) {
     v[createHash('md5').update(w).digest()[0] % DIMS] += 1;
   }
   const n = Math.hypot(...v) || 1;
@@ -66,12 +66,16 @@ test('e2e: index, exclusion, private projects, recall, forget, stats', { skip: !
       ['user', 'This secret project must never be indexed: zorvantil retries backoff details for the secret project only.'],
       ['assistant', 'Agreed, nothing from the secret project about zorvantil retries should ever be stored anywhere at all.'],
     ]));
+    writeFileSync(join(src, 's-intl.jsonl'), session('/work/intl', [
+      ['user', 'Решение по миграции: Квартальский импорт переносим на очередь с повторами, ответственный Иван Петров.'],
+      ['assistant', '关于数据迁移：王伟负责夸塔尔导入任务，失败后重试五次，然后进入死信队列。'],
+    ]));
     const cfgFile = join(dir, 'config.json');
     writeFileSync(cfgFile, JSON.stringify({
       dataDir: join(dir, 'data'),
       embedder: { provider: 'ollama', url: `http://127.0.0.1:${emb.address().port}`, dimensions: DIMS },
       index: { sources: [{ adapter: 'jsonl', dir: src }], exclude: ['secret-proj'] },
-      recall: { private: ['client-x'], lowSimilarity: 0.1, budgetMs: 30000 },   // generous: slow CI disks, not latency, are being tested
+      recall: { private: ['client-x'], entities: ['王伟'], lowSimilarity: 0.1, budgetMs: 30000 },   // generous: slow CI disks, not latency, are being tested
     }));
     const env = { ...process.env, QUIETMEM_DATABASE_URL: URL_ };
     delete env.QUIETMEM_DISABLE;
@@ -103,7 +107,7 @@ test('e2e: index, exclusion, private projects, recall, forget, stats', { skip: !
     const [w] = await psql(`SELECT count(*)::int n, count(DISTINCT content)::int u FROM chunks WHERE session_id = 's-watch'`);
     assert.ok(w.n > 0 && w.n === w.u, `repeated watcher runs were stored more than once: ${JSON.stringify(w)}`);
 
-    assert.match(await q(['tf']), /projects=2/);
+    assert.match(await q(['tf']), /projects=3/);
     const ask = (cwd, session_id = 'now') => q(['recall', '--hook', 'jsonl'],
       JSON.stringify({ prompt: 'what did we decide about the zorvantil retries and the backoff?', session_id, cwd }));
     const fromAcme = await ask('/work/acme');
@@ -114,6 +118,28 @@ test('e2e: index, exclusion, private projects, recall, forget, stats', { skip: !
     assert.match(fromClient, /confidential/i, logTail());                                    // visible in its own project
     assert.doesNotMatch(await ask(null), /confidential/i);                                    // unknown project: hidden
 
+    const found = await q(['search', 'zorvantil', '--limit', '2']);                          // plain search, both lanes
+    assert.match(found, /zorvantil/i);
+    assert.doesNotMatch(found, /secret project/i, 'excluded project is searchable');
+    // Other scripts: a Cyrillic name through the full-text index, a Chinese one through the substring lane.
+    assert.match(await q(['search', 'Квартальский', '--limit', '1']), /Квартальский/);
+    assert.match(await q(['search', '夸塔尔', '--limit', '1']), /夸塔尔/);
+    const zh = await q(['recall', '--hook', 'jsonl'], JSON.stringify({ prompt: '王伟的夸塔尔导入任务我们最后怎么决定的？', session_id: 'now', cwd: '/work/intl' }));
+    assert.match(zh, /王伟/, logTail());
+    // A database from before 0.3.0 (no dense column): indexing and CJK search keep working, init + tf fill it.
+    await psql('ALTER TABLE chunks DROP COLUMN dense');
+    const before = (await psql(`SELECT count(*)::int n FROM chunks WHERE project = 'intl'`))[0].n;
+    appendFileSync(join(src, 's-intl.jsonl'), session('/work/intl', [
+      ['user', '补充说明：夸塔尔导入任务的重试次数从五次改为三次，王伟已经在周会上确认了这个变更，死信队列的告警阈值也一起调整为每小时二十条，下周一开始生效。'],
+      ['assistant', '明白：夸塔尔导入任务现在重试三次，王伟已确认；死信队列告警阈值改为每小时二十条，从下周一开始执行，我会更新相关文档。'],
+    ]));
+    assert.match(await q(['index', '--sweep']), /0 errors/);
+    assert.ok((await psql(`SELECT count(*)::int n FROM chunks WHERE project = 'intl'`))[0].n > before, 'indexing without the dense column stored nothing');
+    assert.match(await q(['search', '夸塔尔', '--limit', '3']), /夸塔尔/);
+    await q(['init']);
+    assert.match(await q(['tf']), /dense words added to [1-9]\d* chunks/);
+    assert.ok((await psql('SELECT count(*)::int n FROM chunks WHERE dense IS NOT NULL'))[0].n >= 2);
+    assert.doesNotMatch(await q(['tf']), /dense words added/);                                 // only once
     assert.match(await q(['forget', '--project', 'acme']), /would delete \d+ chunks/);       // dry run by default
     assert.ok((await psql(`SELECT count(*)::int n FROM chunks WHERE project = 'acme'`))[0].n > 0);
     await q(['forget', '--project', 'acme', '--yes']);
@@ -122,8 +148,8 @@ test('e2e: index, exclusion, private projects, recall, forget, stats', { skip: !
 
     assert.ok(existsSync(join(dir, 'data', 'recall.log.jsonl')));
     const stats = JSON.parse(await q(['stats', '--json']));
-    assert.equal(stats.total, 3);
-    assert.ok(stats.injected >= 2);
+    assert.equal(stats.total, 4);
+    assert.ok(stats.injected >= 3);
     assert.doesNotMatch(readFileSync(join(dir, 'data', 'recall.log.jsonl'), 'utf8'), /zorvantil/, 'log must not hold prompt text');
   } finally { emb.close(); }
 });

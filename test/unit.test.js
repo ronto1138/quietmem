@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { terms, norm } from '../src/terms.js';
+import { terms, norm, tokens } from '../src/terms.js';
 import { redact, looksLikeSecret } from '../src/redact.js';
 import { chunkMessages, splitLong, degenerate } from '../src/chunker.js';
 import { DEFAULTS, merge, maskUrl } from '../src/config.js';
-import { prepare, pick, render } from '../src/recall.js';
+import { prepare, pick, render, namedEntities, lexicalTerms, rarity, search, DEFAULT_INTENT } from '../src/recall.js';
 import { projectOf } from '../src/projects.js';
 import claudeCode from '../src/adapters/claude-code.js';
 import jsonl from '../src/adapters/jsonl.js';
@@ -203,4 +203,93 @@ test('proposals: status counts pending per project and flags near and full', asy
     { project: 'gamma', pending: 2, level: 'ok' },
   ]);
   assert.deepEqual(status(join(dir, 'missing'), 15), []);
+});
+
+test('entities: multi-word and dotted names match the same words in a row', () => {
+  const ents = new Set(['juan perez', 'billing service', 'acme.io', 'zorvantil']);
+  assert.deepEqual(namedEntities('¿Qué le dijimos a Juan Pérez sobre el contrato?', ents), ['juan perez']);
+  assert.deepEqual(namedEntities('the Billing  Service retries', ents), ['billing service']);
+  assert.deepEqual(namedEntities('deploy acme.io tonight', ents), ['acme.io']);
+  assert.deepEqual(namedEntities('juan wrote the billing code for perez', ents), []);   // not in a row
+  assert.deepEqual(namedEntities('zorvantil-importer is slow', ents), ['zorvantil-importer']);
+  assert.ok(!prepare('how did the call with Juan Pérez end up going', cfg, { entities: ents, tf }).stop);
+});
+
+test('render: returns nothing, not a bare header, when no fragment fits', () => {
+  const tight = merge(cfg, { recall: { maxChars: 50 } });
+  const out = render([{ d: '2026-11-01', project: 'p', s: 0.9, content: 'USER: zorvantil depends on quibbix' }], tight);
+  assert.deepEqual(out, { text: '', count: 0 });
+});
+
+test('search: exact matches on very rare names survive a low vector rank', async () => {
+  const { isVeryRare } = rarity(cfg, tf);
+  assert.deepEqual(lexicalTerms('zorvantil memory acme-api', isVeryRare), ['zorvantil', 'acme']);   // 'api' is too short for the exact-match lane
+  const near = Array.from({ length: 10 }, (_, i) => ({ id: String(i + 1), project: 'p', d: '2026-11-01', s: 0.9 - i / 100, content: `near ${i}` }));
+  const db = { query: async sql => ({ rows: sql.includes('to_tsquery')
+    ? [{ id: '99', project: 'p', d: '2026-11-02', s: 0.3, content: 'USER: the zorvantil job' }] : sql.startsWith('SET') ? [] : near }) };
+  const rows = await search(db, cfg, [0.1, 0.2], 'zorvantil memory', { tf, limit: 4 });
+  assert.equal(rows.length, 4);
+  assert.ok(rows.some(r => r.id === '99'), 'the only fragment naming zorvantil was dropped');
+  assert.deepEqual(rows.map(r => r.id), ['1', '2', '3', '99']);                           // still ordered by similarity
+});
+
+test('terms: any alphabet; Chinese and Japanese as bigrams; Thai segmented; hiragana skipped', () => {
+  const t = x => [...terms(x)];
+  assert.deepEqual(t('Was hat die Straßenbahn-Gruppe gesagt?'), ['strassenbahn-gruppe', 'strassenbahn', 'gruppe', 'gesagt']);
+  assert.deepEqual(t('Co mówił Łukasz Nowak?'), ['mowil', 'lukasz', 'nowak']);
+  assert.deepEqual(t('Что решили с Петровым про миграцию?'), ['решили', 'петровым', 'миграцию']);
+  assert.deepEqual(t('नमस्ते दुनिया योजना'), ['नमस्ते', 'दुनिया', 'योजना']);          // vowel signs stay inside the word
+  assert.deepEqual(t('김민수와 회의에서 결정한 것'), ['김민수와', '회의에서', '결정한']);   // Hangul from 2 syllables
+  assert.deepEqual(t('王伟决定'), ['王伟', '伟决', '决定']);
+  assert.ok(!terms('我们和王伟').has('我们'));                                         // common pair
+  assert.deepEqual(t('田中さんとサーバーを'), ['田中', 'サー', 'ーバ', 'バー']);
+  assert.ok(terms('สวัสดีครับเราตัดสินใจ').has('ตัดสิน'));
+  assert.deepEqual(t('the billing-service with gpt5を使った'), ['billing-service', 'billing', 'service', 'gpt5']);
+  assert.equal(norm('が'), 'が');                                                     // dakuten survives accent folding
+  assert.deepEqual(tokens('Иван Петров'), ['иван', 'петров']);
+});
+
+test('lexical lane: database form for spaced scripts, substrings for the rest', () => {
+  const { isVeryRare } = rarity(cfg, tf);
+  assert.deepEqual(lexicalTerms('Co mówił Łukasz o migracji?', isVeryRare), ['mowił', 'łukasz', 'migracji']);   // ó folded like the index folds it, ł kept
+  assert.deepEqual(lexicalTerms('Qué pasó con la migración?', isVeryRare), ['migracion']);   // folded as FTS folds it
+  assert.deepEqual(lexicalTerms('我们和王伟决定', isVeryRare), ['们和', '和王', '王伟', '伟决', '决定']);   // 我们 is a stop pair; 们和 is not
+});
+
+test('entities: names in other scripts', () => {
+  const ents = new Set([norm('Иван Петров'), norm('王伟'), norm('田中'), norm('Łukasz')]);
+  assert.deepEqual(namedEntities('Что мы решили с Иван Петров?', ents), ['иван петров']);
+  assert.deepEqual(namedEntities('我们和王伟决定了什么', ents), ['王伟']);
+  assert.deepEqual(namedEntities('田中さんと何を決めましたか', ents), ['田中']);
+  assert.deepEqual(namedEntities('co mówił Łukasz', ents), ['lukasz']);
+  const q = prepare('我们和王伟决定了什么', cfg, { entities: ents, tf });
+  assert.ok(!q.stop, q.stop);
+});
+
+test('intent: asking to remember, in ten languages; everyday prompts do not count', () => {
+  const re = new RegExp(DEFAULT_INTENT.join('|'), 'i');
+  for (const p of [
+    'what did we decide about the retry policy?', '¿qué decidimos sobre los reintentos?',
+    'O que decidimos sobre a fila?', 'Você se lembra do problema com o importador?',
+    "Qu'est-ce qu'on a décidé pour les retries ?", 'Qu’est-ce qu’on a décidé ?', 'Où en étions-nous ?',
+    'Was haben wir zur Retry-Strategie beschlossen?', 'Weißt du noch, wie wir das gelöst haben?',
+    'Cosa abbiamo deciso per la coda?', 'Com’è andato il rilascio?',
+    'Что мы решили по поводу очереди?', 'На чём мы остановились?',
+    '我们上次怎么决定的？', '数据迁移怎么样了？', '前回何を決めた？', 'インポートの件、どうなった？',
+    '지난번에 어떻게 결정했지?', '마이그레이션 어떻게 됐어?',
+  ]) assert.ok(re.test(p), p);
+  for (const p of [
+    'run the tests and fix whatever fails', 'please add a retry with exponential backoff to the importer',
+    'corre los tests y arregla lo que falle', 'la política de privacidad dice que no guardamos datos',
+    'translate this paragraph into French', 'set the budget to 800 ms for slow laptops',
+  ]) assert.ok(!re.test(p), p);
+});
+
+test('stopwords: function words of more languages, written with accents, never content words', () => {
+  assert.ok(!terms('pourquoi toujours maintenant').size);
+  assert.ok(!terms('können vielleicht wirklich').size);
+  assert.ok(!terms('perché abbiamo sempre').size);
+  assert.ok(!terms('сейчас пожалуйста спасибо').size);
+  assert.ok(!terms('그리고 그래서 감사합니다').size);
+  assert.deepEqual([...terms('la prima del seguro y la factura')], ['prima', 'seguro', 'factura']);   // Spanish content words stay
 });

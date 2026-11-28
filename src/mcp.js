@@ -26,10 +26,10 @@ export async function serve(cfg) {
   const current = process.env.QUIETMEM_PROJECT || projectOf(process.cwd(), cfg, null);
   const text = t => ({ content: [{ type: 'text', text: t }] });
 
-  async function rowsFor(query, opts) {
+  async function withVec(query, fn) {
     const vec = await emb.query(query.slice(0, 2000));
     const db = await connect(cfg);
-    try { await db.query(R.searchSettings(cfg)); return await R.candidates(db, cfg, vec, { ...opts, current }); }
+    try { await db.query(R.searchSettings(cfg)); return await fn(db, vec); }
     finally { await db.end().catch(() => {}); }
   }
 
@@ -37,7 +37,7 @@ export async function serve(cfg) {
     'Search past conversations with the user (all projects unless one is given). Use it when the user refers to earlier work, decisions or context you do not have.',
     { query: z.string().min(3), limit: z.number().int().min(1).max(20).optional(), project: z.string().optional() },
     async ({ query, limit = 8, project }) => {
-      const rows = (await rowsFor(query, { lexTerms: [], project })).slice(0, limit);
+      const rows = await withVec(query, (db, vec) => R.search(db, cfg, vec, query, { tf, limit, project, current }));
       if (!rows.length) return text('No matching fragments.');
       return text(rows.map(r => `— ${r.d} · ${r.project} · similarity ${r.s.toFixed(2)}\n${redact(r.content).slice(0, 900)}`).join('\n\n'));
     });
@@ -48,8 +48,8 @@ export async function serve(cfg) {
     async ({ message }) => {
       const q = R.prepare(message, cfg, { entities, tf });
       if (q.stop) return text(`No recall (${q.stop}).`);
-      const picked = R.pick(await rowsFor(message, { lexTerms: q.lexTerms }), cfg, q);
-      return text(picked.length ? R.render(picked, cfg).text : 'No recall (no_match).');
+      const rows = await withVec(message, (db, vec) => R.candidates(db, cfg, vec, { lexTerms: q.lexTerms, current }));
+      return text(R.render(R.pick(rows, cfg, q), cfg).text || 'No recall (no_match).');
     });
 
   await server.connect(new StdioServerTransport());

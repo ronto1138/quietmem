@@ -56,6 +56,37 @@ Yours will differ. To tune:
 If you do this on a corpus in another language, please share the numbers in an issue: it is the most
 useful contribution after adapters.
 
+## Languages
+
+Terms come from any alphabet: Latin, Cyrillic, Greek, Devanagari, Arabic, Hebrew, Hangul (Hangul words
+count from two syllables; the others from five letters, like Latin). Accents are folded, and so are the
+letters that are not "letter + accent" (ß → ss, ł → l, ø → o, æ → ae...).
+
+Scripts written without spaces need another split. Chinese and Japanese kanji and katakana become
+overlapping character pairs (王伟决定 → 王伟 · 伟决 · 决定): a word segmenter splits names apart
+(王伟 → 王 | 伟), while pairs keep every name of two characters or more, and rarity discards the pairs that
+straddle two words. Hiragana is grammar and is skipped. Thai, Lao, Khmer and Myanmar are split with
+`Intl.Segmenter`. For the short-prompt gate, a character of these scripts counts as three Latin ones and two
+make a word.
+
+In the database, words of spaced scripts go through the same full-text index as before. Postgres sees a
+whole Chinese or Thai sentence as one word, so pairs and segmented words are stored in `chunks.dense`
+(a GIN-indexed `text[]`, filled at indexing time) and the exact-match lane queries it. On 60k chunks of
+~1,200 characters, that lookup takes under a millisecond; a substring scan without it took 0.3–1.2 s, over
+the recall budget.
+
+Intent patterns ("what did we decide", "qué decidimos", "o que decidimos", "qu'est-ce qu'on a décidé",
+"was haben wir beschlossen", "cosa abbiamo deciso", "что мы решили", "我们决定了", "何を決めた",
+"어떻게 결정했지") and stopwords cover English, Spanish, Portuguese, French, German, Italian, Russian,
+Chinese, Japanese and Korean. French and Italian patterns accept the curly apostrophe phone keyboards type.
+They were checked against 30 everyday English and Spanish prompts: none of them asks to remember, and none
+opens the gate, as before. No stopword is a content word in another of these languages (Italian "prima" is
+left out: it is a Spanish insurance term). In any other language, configure entities, which open the gate
+in any script, or `recall.intentPatterns` (which replaces the built-in list, so copy it first).
+
+The thresholds were calibrated on Spanish and English only; calibration numbers from other languages are
+very welcome.
+
 ## Indexing
 
 Transcripts are read incrementally from the last byte offset (`index_state`), in 64 MB blocks, so a

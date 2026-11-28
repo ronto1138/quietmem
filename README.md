@@ -17,6 +17,10 @@ relevant fragments to the model. When it is not confident, it injects nothing.
   forget sessions or whole projects, and mask secrets in everything it prints.
 - **Memory you approve.** An optional nightly job reads the day's conversations and *proposes* durable
   memories (decisions, preferences, references) as Markdown files. Nothing is written until you accept it.
+- **Any language.** Terms and entity names work in any alphabet, and in Chinese, Japanese and Thai, which are
+  written without spaces. Phrases like "what did we decide" are recognized in ten languages (English,
+  Spanish, Portuguese, French, German, Italian, Russian, Chinese, Japanese, Korean); in others, entities
+  open the gate. See [docs/design.md](docs/design.md#languages).
 - **Any harness, any model.** Hooks for Claude Code; an MCP server for Cursor, Codex CLI, Windsurf, Zed,
   Claude Desktop and any other MCP client; a plain JSONL format for everything else. Embeddings from
   Ollama or any OpenAI-compatible endpoint; proposals from whatever command you configure.

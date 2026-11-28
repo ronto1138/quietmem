@@ -22,9 +22,11 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { terms, tokens, norm } from './terms.js';
+import { terms, tokens, norm, words, NOSPACE } from './terms.js';
 import { redact } from './redact.js';
-import { FTS, searchSettings } from './db.js';
+import { FTS, ftsForm, searchSettings } from './db.js';
+
+const NOSPACE_G = new RegExp(NOSPACE.source, 'gu');
 
 export const MACHINE = /<\/?(task-notification|system-reminder|local-command-[a-z]+|command-(name|message|args)|bash-(input|stdout|stderr)|user-prompt-submit-hook|agent-message|cross-session-message)\b|^Another Claude session sent a message/;
 
@@ -37,6 +39,31 @@ export const DEFAULT_INTENT = [
   'qu[eé] (decidimos|acordamos|quedamos|dijimos|hicimos|hab[ií]amos)', 'recu[eé]rda(me)?\\b', 'acu[eé]rdate',
   'te acuerdas', 'c[oó]mo qued[oó]', 'qu[eé] pas[oó] con', 'la [uú]ltima vez', 'ya (vimos|hablamos|hicimos)',
   'd[oó]nde (nos )?quedamos', 'en qu[eé] qued', 'cu[aá]ndo (vimos|hicimos|decidimos)',
+  // Portuguese
+  'o que (n[oó]s )?(decidimos|combinamos|dissemos|fizemos|t[ií]nhamos)', 'lembr[ae]-?me\\b', 'voc[eê] (se )?lembra',
+  'da [uú]ltima vez', 'onde (n[oó]s )?paramos', 'como ficou', 'o que aconteceu com', 'j[aá] (falamos|discutimos|vimos|fizemos)',
+  // French and Italian: straight or curly apostrophe (phone keyboards type ’)
+  "qu['’]est-ce qu['’]on (a|avait) (d[eé]cid[eé]|dit|convenu|fait)", "qu['’]avons-nous (d[eé]cid[eé]|dit|convenu|fait)",
+  'on (avait|a d[eé]j[aà]) (d[eé]cid[eé]|dit|convenu|parl[eé])', 'rappelle-moi', 'tu te (souviens|rappelles)',
+  'la derni[eè]re fois', 'o[uù] (on |nous )?en ([eé]tions|[eé]tait|sommes)', "comment (s['’]est pass[eé]|[cç]a s['’]est pass[eé])",
+  "qu['’]est-ce qui s['’]est pass[eé] avec",
+  // German
+  'was haben wir .{0,40}(beschlossen|entschieden|besprochen|vereinbart|gesagt|gemacht)', 'erinner(e|st) (mich|dich)',
+  'wei(ß|ss)t du noch', 'letzte(s|n)? mal', 'wo (waren|sind) wir stehen', 'wie (ist|lief|war) .{1,40} (gelaufen|ausgegangen)',
+  'was ist (mit|aus) .{1,40} (passiert|geworden)', 'hatten wir (schon|bereits)',
+  // Italian
+  'cosa (abbiamo )?(deciso|detto|concordato|stabilito)', 'ricordami', 'ti ricordi', "l['’]ultima volta",
+  'dove eravamo rimasti', "com['’][eè] andat[oa]", 'cosa [eè] successo (con|a)', 'ne abbiamo gi[aà] (parlato|discusso)',
+  // Russian (no \b: without the u flag it only knows ASCII letters)
+  'что мы (решили|обсуждали|обсудили|договорились|говорили|сделали)', 'напомни', 'помнишь', 'в прошлый раз',
+  'на ч[её]м (мы )?останов', 'как (прош[её]л|прошла|прошло|закончил)', 'что случилось с', 'мы (уже )?(обсуждали|решали)',
+  // Chinese
+  '上次', '之前.{0,8}(决定|讨论|说|商量|约定|做)', '我们.{0,6}(决定|商量|讨论|说好|约定)(了|过)', '还记得', '记得.{0,10}吗',
+  '提醒我', '怎么样了', '进展如何', '结果如何', '后来怎么',
+  // Japanese
+  '前回', 'この前', '覚えて', '思い出', '何を決め', '決めた(っけ|の)', 'どうなった', '話した(っけ|こと)', 'どこまで',
+  // Korean
+  '지난번', '저번에', '기억(나|해|하)', '뭐라고 했', '결정했(던|지|나)', '어떻게 됐', '어디까지', '이야기했(던|지)',
 ];
 
 export function loadEntities(cfg, tf = null) {
@@ -84,19 +111,15 @@ export function loadTermFrequencies(cfg) {
 export function prepare(prompt, cfg, { entities, tf }) {
   const r = cfg.recall;
   if (MACHINE.test(prompt.slice(0, 400))) return { stop: 'machine_event' };
-  const words = prompt.split(/\s+/).filter(Boolean).length;
-  if (prompt.length < r.minChars || words < r.minWords) return { stop: 'short' };
+  // Scripts without spaces: a character carries about as much as three Latin ones, and two make a word.
+  const dense = (prompt.match(NOSPACE_G) || []).length;
+  const words = prompt.split(/\s+/).filter(Boolean).length + (dense >> 1);
+  if (prompt.length + 2 * dense < r.minChars || words < r.minWords) return { stop: 'short' };
   const qTerms = terms(prompt);
   const intentRe = new RegExp((r.intentPatterns || DEFAULT_INTENT).join('|'), 'i');
-  const named = tokens(prompt).filter(w => entities.has(w) || w.split('-').some(p => entities.has(p)));
+  const named = namedEntities(prompt, entities);
   const intent = intentRe.test(prompt);
-
-  // A term seen in fewer than minDf chunks is always rare and very rare. That keeps a small, young
-  // corpus usable (otherwise every word of a 10-chunk corpus is "common") and matches `quietmem tf`, which
-  // only stores terms with df >= minDf.
-  const chunks = tf?.chunks || 0, df = tf?.df || {}, minDf = r.minDf ?? 30;
-  const isCommon = t => (df[t] || 0) >= Math.max(minDf, chunks * r.rarePct);
-  const isVeryRare = t => (df[t] || 0) < Math.max(minDf, chunks * r.veryRarePct);
+  const { isCommon, isVeryRare } = rarity(cfg, tf);
   const rare = [...qTerms].filter(t => !isCommon(t));
 
   // With no entities configured, a rare term stands in for a named entity (less precise; configure entities).
@@ -105,9 +128,73 @@ export function prepare(prompt, cfg, { entities, tf }) {
   if (qTerms.size < (named.length ? 1 : r.minSharedTerms)) return { stop: 'few_terms' };
   if (!rare.length) return { stop: 'no_rare_terms' };
 
-  const lexTerms = [...new Set([...qTerms].flatMap(t => t.split(/[-_.]/)))]
-    .filter(t => /^[a-z0-9]{4,}$/.test(t) && isVeryRare(t)).slice(0, 8);
-  return { qTerms, named, intent, rare, lexTerms, isCommon, isVeryRare };
+  return { qTerms, named, intent, rare, lexTerms: lexicalTerms(prompt, isVeryRare, qTerms), isCommon, isVeryRare };
+}
+
+/**
+ * Entities the text names. Single-word entities match a token (or a part of a hyphenated one);
+ * multi-word ones ("Juan Pérez", "billing service", "acme.io") match the same tokens in a row; names in a
+ * script written without spaces ("王伟", "田中") match anywhere in the text.
+ */
+export function namedEntities(text, entities) {
+  const toks = tokens(text);
+  const named = toks.filter(w => entities.has(w) || w.split('-').some(p => entities.has(p)));
+  const line = ` ${toks.join(' ')} `;
+  let flat;
+  for (const e of entities) {
+    if (NOSPACE.test(e)) { if ((flat ??= norm(text)).includes(e)) named.push(e); continue; }
+    const et = tokens(e);
+    if (et.length > 1 && line.includes(` ${et.join(' ')} `)) named.push(e);
+  }
+  return named;
+}
+
+/**
+ * Rarity tests over the corpus' document frequencies. A term seen in fewer than minDf chunks is always
+ * rare and very rare. That keeps a small, young corpus usable (otherwise every word of a 10-chunk corpus
+ * is "common") and matches `quietmem tf`, which only stores terms with df >= minDf.
+ */
+export function rarity(cfg, tf) {
+  const r = cfg.recall;
+  const chunks = tf?.chunks || 0, df = tf?.df || {}, minDf = r.minDf ?? 30;
+  return {
+    isCommon: t => (df[t] || 0) >= Math.max(minDf, chunks * r.rarePct),
+    isVeryRare: t => (df[t] || 0) < Math.max(minDf, chunks * r.veryRarePct),
+  };
+}
+
+/**
+ * Very rare words of `text` for the exact-match lane (new names embed poorly), in the form the database
+ * holds them: words of spaced scripts go to the full-text index (accents folded as FTS folds them),
+ * bigrams and words of scripts without spaces to the chunks.dense index (Postgres sees a whole sentence
+ * there as one word). Only letters, marks and digits, so safe in a tsquery.
+ */
+export function lexicalTerms(text, isVeryRare, qTerms = terms(text)) {
+  const out = new Set();
+  for (const { kind, raw, key } of words(text)) {
+    if (kind === 'cjk') { if (qTerms.has(key) && isVeryRare(key)) out.add(key); continue; }
+    // Parts of a term word: "billing-service" -> billing, service; "acme.io" -> acme.
+    if (!qTerms.has(key) && !key.split('-').some(p => qTerms.has(p))) continue;
+    for (const part of raw.split(/[-_.]/)) {
+      const k = norm(part), n = Array.from(k).length;
+      if (/^[\p{L}\p{M}\p{N}]+$/u.test(part) && n >= (/\p{sc=Hangul}/u.test(k) ? 2 : 4) && isVeryRare(k)) out.add(ftsForm(part));
+    }
+  }
+  return [...out].slice(0, 8);
+}
+
+/**
+ * Plain search (no gates), for `quietmem search` and the MCP search_memory tool. Exact-match hits on very
+ * rare terms are kept even when the vector ranks them low: whoever searches for a name wants the fragments
+ * that contain it. They take at most half of the results.
+ */
+export async function search(db, cfg, vec, text, { tf, limit = 8, ...opts } = {}) {
+  const lexTerms = lexicalTerms(text, rarity(cfg, tf).isVeryRare);
+  const rows = await candidates(db, cfg, vec, { ...opts, lexTerms });
+  const lex = rows.filter(r => r.lex).slice(0, Math.ceil(limit / 2));
+  const keep = new Set(lex.map(r => r.id));
+  for (const r of rows) { if (keep.size >= limit) break; keep.add(r.id); }
+  return rows.filter(r => keep.has(r.id));
 }
 
 /** Vector + lexical candidates. `vec` is the query embedding. */
@@ -119,15 +206,28 @@ export async function candidates(db, cfg, vec, { sessionId, lexTerms = [], proje
     `SELECT id, project, to_char(ts,'YYYY-MM-DD') d, 1 - (embedding <=> $1::vector) AS s, content
        FROM chunks WHERE ${where}
       ORDER BY embedding <=> $1::vector LIMIT ${Number(cfg.recall.candidates) | 0}`, params);
-  let all = rows;
-  if (lexTerms.length) {
-    const lp = [...params, lexTerms.join(' | ')];
-    const { rows: lex } = await db.query(
+  const all = rows;
+  const have = new Set(rows.map(r => String(r.id)));
+  const add = lex => { for (const r of lex) if (!have.has(String(r.id))) { have.add(String(r.id)); all.push({ ...r, lex: true }); } };
+  const fts = lexTerms.filter(t => !NOSPACE.test(t)), dense = lexTerms.filter(t => NOSPACE.test(t));
+  if (fts.length) {
+    const lp = [...params, fts.join(' | ')];
+    add((await db.query(
       `SELECT id, project, to_char(ts,'YYYY-MM-DD') d, 1 - (embedding <=> $1::vector) AS s, content
          FROM chunks WHERE ${where} AND embedding IS NOT NULL AND ${FTS} @@ to_tsquery('simple', $${lp.length})
-        ORDER BY embedding <=> $1::vector LIMIT 10`, lp);
-    const have = new Set(all.map(r => String(r.id)));
-    all = all.concat(lex.filter(r => !have.has(String(r.id))));
+        ORDER BY embedding <=> $1::vector LIMIT 10`, lp)).rows);
+  }
+  if (dense.length) {
+    // MATERIALIZED: rank the (few) chunks holding the words, instead of letting the planner walk the vector
+    // index and filter, which finds nothing for a rare word.
+    const lp = [...params, dense];
+    try {
+      add((await db.query(
+        `WITH hits AS MATERIALIZED (SELECT id, project, ts, content, embedding FROM chunks
+            WHERE ${where} AND embedding IS NOT NULL AND dense && $${lp.length}::text[] LIMIT 200)
+         SELECT id, project, to_char(ts,'YYYY-MM-DD') d, 1 - (embedding <=> $1::vector) AS s, content
+           FROM hits ORDER BY embedding <=> $1::vector LIMIT 10`, lp)).rows);
+    } catch (e) { if (e.code !== '42703') throw e; }   // no dense column yet (`quietmem init`): vector and FTS only
   }
   return all.map(r => ({ ...r, s: Number(r.s) })).sort((a, b) => b.s - a.s);
 }
@@ -168,7 +268,8 @@ export function render(picked, cfg) {
     if (out.length + block.length > r.maxChars) break;
     out += block; n++;
   }
-  return { text: out, count: n };
+  // Nothing fit (maxChars smaller than one fragment): the header alone would be noise.
+  return n ? { text: out, count: n } : { text: '', count: 0 };
 }
 
 export { searchSettings };
