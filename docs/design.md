@@ -56,6 +56,30 @@ Yours will differ. To tune:
 If you do this on a corpus in another language, please share the numbers in an issue: it is the most
 useful contribution after adapters.
 
+## Languages
+
+Terms come from any alphabet: Latin, Cyrillic, Greek, Devanagari, Arabic, Hebrew, Hangul (Hangul words
+count from two syllables; the others from five letters, like Latin). Accents are folded, and so are the
+letters that are not "letter + accent" (ß → ss, ł → l, ø → o, æ → ae...).
+
+Scripts written without spaces need another split. Chinese and Japanese kanji and katakana become
+overlapping character pairs (王伟决定 → 王伟 · 伟决 · 决定): a word segmenter splits names apart
+(王伟 → 王 | 伟), while pairs keep every name of two characters or more, and rarity discards the pairs that
+straddle two words. Hiragana is grammar and is skipped. Thai, Lao, Khmer and Myanmar are split with
+`Intl.Segmenter`. For the short-prompt gate, a character of these scripts counts as three Latin ones and two
+make a word.
+
+In the database, words of spaced scripts go through the same full-text index as before. Postgres sees a
+whole Chinese or Thai sentence as one word, so pairs and segmented words are stored in `chunks.dense`
+(a GIN-indexed `text[]`, filled at indexing time) and the exact-match lane queries it. On 60k chunks of
+~1,200 characters, that lookup takes under a millisecond; a substring scan without it took 0.3–1.2 s, over
+the recall budget.
+
+What is not multilingual yet: intent patterns ("what did we decide", "qué decidimos") and stopwords cover
+English and Spanish only (plus the commonest Chinese pairs). In other languages, configure entities: they
+open the gate in any script. The thresholds were calibrated on Spanish and English only; calibration
+numbers from other languages are very welcome.
+
 ## Indexing
 
 Transcripts are read incrementally from the last byte offset (`index_state`), in 64 MB blocks, so a

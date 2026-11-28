@@ -214,25 +214,40 @@ const commands = {
   },
 
   async tf() {
-    const { terms } = await import('../src/terms.js');
+    const { terms, denseKeys } = await import('../src/terms.js');
+    const { hasDense } = await import('../src/db.js');
     const MIN_KEEP = Number(opt('min', 30));
-    let projects = {}, chunks = 0;
+    let projects = {}, chunks = 0, filled = 0, dense = false;
     const df = new Map();
     await withDb(async db => {
       await db.query('SET statement_timeout = 0');
       const { rows: pr } = await db.query('SELECT project, count(*)::int n FROM chunks GROUP BY project ORDER BY 2 DESC');
       projects = Object.fromEntries(pr.map(r => [r.project, r.n]));
-      // In pages by id, so memory stays flat however big the corpus grows.
+      dense = await hasDense(db);
+      // In pages by id, so memory stays flat however big the corpus grows. Chunks indexed before 0.3.0 get
+      // their dense words (Chinese, Japanese, Thai...) on the way.
       for (let last = 0; ;) {
-        const { rows } = await db.query('SELECT id, content FROM chunks WHERE id > $1 ORDER BY id LIMIT 5000', [last]);
+        const { rows } = await db.query(`SELECT id, content${dense ? ', dense IS NULL AS missing' : ''} FROM chunks WHERE id > $1 ORDER BY id LIMIT 5000`, [last]);
         if (!rows.length) break;
-        for (const { content } of rows) for (const t of terms(content)) df.set(t, (df.get(t) || 0) + 1);
+        const fill = [];
+        for (const { id, content, missing } of rows) {
+          for (const t of terms(content)) df.set(t, (df.get(t) || 0) + 1);
+          const d = missing && denseKeys(content);
+          if (d) fill.push({ id, d });
+        }
+        if (fill.length) {
+          await db.query(`UPDATE chunks c SET dense = ARRAY(SELECT jsonb_array_elements_text(u.d))
+            FROM jsonb_to_recordset($1::jsonb) AS u(id bigint, d jsonb) WHERE c.id = u.id`, [JSON.stringify(fill)]);
+          filled += fill.length;
+        }
         chunks += rows.length; last = rows[rows.length - 1].id;
       }
     });
     const kept = Object.fromEntries([...df].filter(([, n]) => n >= MIN_KEEP).sort((a, b) => b[1] - a[1]));
     mkdirSync(cfg.dataDir, { recursive: true });
     writeFileSync(join(cfg.dataDir, 'term-frequencies.json'), JSON.stringify({ built: new Date().toISOString(), chunks, min_keep: MIN_KEEP, projects, df: kept }));
+    if (filled) console.log(`dense words added to ${filled} chunks indexed before 0.3.0`);
+    if (!dense) console.log('run `quietmem init` to add the index for Chinese, Japanese, Thai... (then `quietmem tf` again)');
     console.log(`chunks=${chunks} projects=${Object.keys(projects).length} vocabulary=${df.size} kept(df>=${MIN_KEEP})=${Object.keys(kept).length}`);
   },
 
@@ -293,6 +308,8 @@ const commands = {
     try {
       const { rows: [n] } = await db.query('SELECT count(*)::int n FROM chunks');
       ok(`${n.n} chunks indexed`);
+      const { hasDense } = await import('../src/db.js');
+      if (!(await hasDense(db))) console.log('  warn  database from before 0.3.0: run `quietmem init`, then `quietmem tf` (exact match for Chinese, Japanese, Thai...)');
       if (!vec) return;
       const lit = '[' + vec.join(',') + ']';
       const sql = 'SELECT id FROM chunks ORDER BY embedding <=> $1::vector LIMIT 30';

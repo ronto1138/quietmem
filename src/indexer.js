@@ -7,6 +7,8 @@
 import { openSync, readSync, fstatSync, closeSync, statSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chunkMessages } from './chunker.js';
+import { denseKeys } from './terms.js';
+import { hasDense } from './db.js';
 import { projectOf } from './projects.js';
 import { expandHome } from './config.js';
 
@@ -75,6 +77,7 @@ export async function indexFile(db, cfg, embedder, adapter, rawPath, sessionId =
       skipBefore = m.mx;
     }
     let total = 0, bytes = 0;
+    const dense = await hasDense(db);   // false until `quietmem init` has run on a database from before 0.3.0
     for (let round = 0; round < 1000; round++) {
       const { lines, next } = readBlock(path, offset);
       if (next === offset) break;
@@ -99,12 +102,14 @@ export async function indexFile(db, cfg, embedder, adapter, rawPath, sessionId =
           const b = chunks.slice(i, i + cfg.index.batch);
           const vecs = await embedder.documents(b.map(c => c.content));
           const vals = [], params = [];
+          const w = dense ? 8 : 7;
           b.forEach((c, j) => {
-            const k = j * 7;
-            vals.push(`($${k + 1},$${k + 2},$${k + 3},$${k + 4},$${k + 5},$${k + 6},$${k + 7}::vector)`);
+            const k = j * w;
+            vals.push(`($${k + 1},$${k + 2},$${k + 3},$${k + 4},$${k + 5},$${k + 6},$${k + 7}::vector${dense ? `,$${k + 8}::text[]` : ''})`);
             params.push(adapter.name, project, path, sessionId, c.ts, c.content, '[' + vecs[j].join(',') + ']');
+            if (dense) params.push(denseKeys(c.content));
           });
-          await db.query(`INSERT INTO chunks(source,project,path,session_id,ts,content,embedding) VALUES ${vals.join(',')}`, params);
+          await db.query(`INSERT INTO chunks(source,project,path,session_id,ts,content,embedding${dense ? ',dense' : ''}) VALUES ${vals.join(',')}`, params);
         }
         await db.query(
           `INSERT INTO index_state(session_id,path,project,byte_offset,baseline_ts,excluded,updated_at) VALUES ($1,$2,$3,$4,$5,false,now())

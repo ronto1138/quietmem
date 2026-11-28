@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS chunks (
   embedding   vector({{DIMENSIONS}})
 );
 
+-- 0.3.0: bigrams and words of scripts written without spaces (Chinese, Japanese, Thai...), which text search
+-- cannot split. NULL for chunks without them. `quietmem tf` fills it for chunks indexed before.
+ALTER TABLE chunks ADD COLUMN IF NOT EXISTS dense text[];
+CREATE INDEX IF NOT EXISTS chunks_dense_idx ON chunks USING gin (dense);
+
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks {{VECTOR_INDEX}};
 CREATE INDEX IF NOT EXISTS chunks_fts_idx ON chunks USING gin (
   to_tsvector('simple', translate(lower(content), 'áéíóúüñàèìòùâêîôûç', 'aeiouunaeiouaeiouc')));

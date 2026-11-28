@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { terms, norm } from '../src/terms.js';
+import { terms, norm, tokens } from '../src/terms.js';
 import { redact, looksLikeSecret } from '../src/redact.js';
 import { chunkMessages, splitLong, degenerate } from '../src/chunker.js';
 import { DEFAULTS, merge, maskUrl } from '../src/config.js';
@@ -223,7 +223,7 @@ test('render: returns nothing, not a bare header, when no fragment fits', () => 
 
 test('search: exact matches on very rare names survive a low vector rank', async () => {
   const { isVeryRare } = rarity(cfg, tf);
-  assert.deepEqual(lexicalTerms(new Set(['zorvantil', 'memory', 'acme-api']), isVeryRare), ['zorvantil', 'acme']);   // 'api' is too short for the exact-match lane
+  assert.deepEqual(lexicalTerms('zorvantil memory acme-api', isVeryRare), ['zorvantil', 'acme']);   // 'api' is too short for the exact-match lane
   const near = Array.from({ length: 10 }, (_, i) => ({ id: String(i + 1), project: 'p', d: '2026-11-01', s: 0.9 - i / 100, content: `near ${i}` }));
   const db = { query: async sql => ({ rows: sql.includes('to_tsquery')
     ? [{ id: '99', project: 'p', d: '2026-11-02', s: 0.3, content: 'USER: the zorvantil job' }] : sql.startsWith('SET') ? [] : near }) };
@@ -231,4 +231,37 @@ test('search: exact matches on very rare names survive a low vector rank', async
   assert.equal(rows.length, 4);
   assert.ok(rows.some(r => r.id === '99'), 'the only fragment naming zorvantil was dropped');
   assert.deepEqual(rows.map(r => r.id), ['1', '2', '3', '99']);                           // still ordered by similarity
+});
+
+test('terms: any alphabet; Chinese and Japanese as bigrams; Thai segmented; hiragana skipped', () => {
+  const t = x => [...terms(x)];
+  assert.deepEqual(t('Was hat die Straßenbahn-Gruppe gesagt?'), ['strassenbahn-gruppe', 'strassenbahn', 'gruppe', 'gesagt']);
+  assert.deepEqual(t('Co mówił Łukasz Nowak?'), ['mowil', 'lukasz', 'nowak']);
+  assert.deepEqual(t('Что решили с Петровым про миграцию?'), ['решили', 'петровым', 'миграцию']);
+  assert.deepEqual(t('नमस्ते दुनिया योजना'), ['नमस्ते', 'दुनिया', 'योजना']);          // vowel signs stay inside the word
+  assert.deepEqual(t('김민수와 회의에서 결정한 것'), ['김민수와', '회의에서', '결정한']);   // Hangul from 2 syllables
+  assert.deepEqual(t('王伟决定'), ['王伟', '伟决', '决定']);
+  assert.ok(!terms('我们和王伟').has('我们'));                                         // common pair
+  assert.deepEqual(t('田中さんとサーバーを'), ['田中', 'サー', 'ーバ', 'バー']);
+  assert.ok(terms('สวัสดีครับเราตัดสินใจ').has('ตัดสิน'));
+  assert.deepEqual(t('the billing-service with gpt5を使った'), ['billing-service', 'billing', 'service', 'gpt5']);
+  assert.equal(norm('が'), 'が');                                                     // dakuten survives accent folding
+  assert.deepEqual(tokens('Иван Петров'), ['иван', 'петров']);
+});
+
+test('lexical lane: database form for spaced scripts, substrings for the rest', () => {
+  const { isVeryRare } = rarity(cfg, tf);
+  assert.deepEqual(lexicalTerms('Co mówił Łukasz o migracji?', isVeryRare), ['mowił', 'łukasz', 'migracji']);   // ó folded like the index folds it, ł kept
+  assert.deepEqual(lexicalTerms('Qué pasó con la migración?', isVeryRare), ['migracion']);   // folded as FTS folds it
+  assert.deepEqual(lexicalTerms('我们和王伟决定', isVeryRare), ['们和', '和王', '王伟', '伟决', '决定']);   // 我们 is a stop pair; 们和 is not
+});
+
+test('entities: names in other scripts', () => {
+  const ents = new Set([norm('Иван Петров'), norm('王伟'), norm('田中'), norm('Łukasz')]);
+  assert.deepEqual(namedEntities('Что мы решили с Иван Петров?', ents), ['иван петров']);
+  assert.deepEqual(namedEntities('我们和王伟决定了什么', ents), ['王伟']);
+  assert.deepEqual(namedEntities('田中さんと何を決めましたか', ents), ['田中']);
+  assert.deepEqual(namedEntities('co mówił Łukasz', ents), ['lukasz']);
+  const q = prepare('我们和王伟决定了什么', cfg, { entities: ents, tf });
+  assert.ok(!q.stop, q.stop);
 });

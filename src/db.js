@@ -17,6 +17,10 @@ export async function connect(cfg, { timeoutMs = 5000, statementTimeoutMs } = {}
   return db;
 }
 
+/** Does chunks have the 0.3.0 `dense` column? (A database created before needs `quietmem init`.) */
+export const hasDense = async db => (await db.query(
+  `SELECT 1 FROM information_schema.columns WHERE table_name = 'chunks' AND column_name = 'dense'`)).rows.length > 0;
+
 // Per-connection search settings for the configured vector index.
 export const searchSettings = cfg => cfg.database.index === 'ivfflat'
   ? `SET ivfflat.probes = ${Number(cfg.database.probes) | 0}`
@@ -35,4 +39,7 @@ export function schemaSql(cfg) {
 
 // Text-search expression shared by the index (schema.sql) and the lexical query. Must match exactly,
 // or Postgres will not use the GIN index.
-export const FTS = `to_tsvector('simple', translate(lower(content), 'áéíóúüñàèìòùâêîôûç', 'aeiouunaeiouaeiouc'))`;
+const FROM = 'áéíóúüñàèìòùâêîôûç', TO = 'aeiouunaeiouaeiouc';
+export const FTS = `to_tsvector('simple', translate(lower(content), '${FROM}', '${TO}'))`;
+// The same folding in JS, for a lowercased word: what the index holds for it ("łukasz", "straße", "иван").
+export const ftsForm = w => Array.from(w, c => { const i = FROM.indexOf(c); return i < 0 ? c : TO[i]; }).join('');
