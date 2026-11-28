@@ -39,6 +39,31 @@ export const DEFAULT_INTENT = [
   'qu[eé] (decidimos|acordamos|quedamos|dijimos|hicimos|hab[ií]amos)', 'recu[eé]rda(me)?\\b', 'acu[eé]rdate',
   'te acuerdas', 'c[oó]mo qued[oó]', 'qu[eé] pas[oó] con', 'la [uú]ltima vez', 'ya (vimos|hablamos|hicimos)',
   'd[oó]nde (nos )?quedamos', 'en qu[eé] qued', 'cu[aá]ndo (vimos|hicimos|decidimos)',
+  // Portuguese
+  'o que (n[oó]s )?(decidimos|combinamos|dissemos|fizemos|t[ií]nhamos)', 'lembr[ae]-?me\\b', 'voc[eê] (se )?lembra',
+  'da [uú]ltima vez', 'onde (n[oó]s )?paramos', 'como ficou', 'o que aconteceu com', 'j[aá] (falamos|discutimos|vimos|fizemos)',
+  // French and Italian: straight or curly apostrophe (phone keyboards type ’)
+  "qu['’]est-ce qu['’]on (a|avait) (d[eé]cid[eé]|dit|convenu|fait)", "qu['’]avons-nous (d[eé]cid[eé]|dit|convenu|fait)",
+  'on (avait|a d[eé]j[aà]) (d[eé]cid[eé]|dit|convenu|parl[eé])', 'rappelle-moi', 'tu te (souviens|rappelles)',
+  'la derni[eè]re fois', 'o[uù] (on |nous )?en ([eé]tions|[eé]tait|sommes)', "comment (s['’]est pass[eé]|[cç]a s['’]est pass[eé])",
+  "qu['’]est-ce qui s['’]est pass[eé] avec",
+  // German
+  'was haben wir .{0,40}(beschlossen|entschieden|besprochen|vereinbart|gesagt|gemacht)', 'erinner(e|st) (mich|dich)',
+  'wei(ß|ss)t du noch', 'letzte(s|n)? mal', 'wo (waren|sind) wir stehen', 'wie (ist|lief|war) .{1,40} (gelaufen|ausgegangen)',
+  'was ist (mit|aus) .{1,40} (passiert|geworden)', 'hatten wir (schon|bereits)',
+  // Italian
+  'cosa (abbiamo )?(deciso|detto|concordato|stabilito)', 'ricordami', 'ti ricordi', "l['’]ultima volta",
+  'dove eravamo rimasti', "com['’][eè] andat[oa]", 'cosa [eè] successo (con|a)', 'ne abbiamo gi[aà] (parlato|discusso)',
+  // Russian (no \b: without the u flag it only knows ASCII letters)
+  'что мы (решили|обсуждали|обсудили|договорились|говорили|сделали)', 'напомни', 'помнишь', 'в прошлый раз',
+  'на ч[её]м (мы )?останов', 'как (прош[её]л|прошла|прошло|закончил)', 'что случилось с', 'мы (уже )?(обсуждали|решали)',
+  // Chinese
+  '上次', '之前.{0,8}(决定|讨论|说|商量|约定|做)', '我们.{0,6}(决定|商量|讨论|说好|约定)(了|过)', '还记得', '记得.{0,10}吗',
+  '提醒我', '怎么样了', '进展如何', '结果如何', '后来怎么',
+  // Japanese
+  '前回', 'この前', '覚えて', '思い出', '何を決め', '決めた(っけ|の)', 'どうなった', '話した(っけ|こと)', 'どこまで',
+  // Korean
+  '지난번', '저번에', '기억(나|해|하)', '뭐라고 했', '결정했(던|지|나)', '어떻게 됐', '어디까지', '이야기했(던|지)',
 ];
 
 export function loadEntities(cfg, tf = null) {

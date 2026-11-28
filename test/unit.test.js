@@ -4,7 +4,7 @@ import { terms, norm, tokens } from '../src/terms.js';
 import { redact, looksLikeSecret } from '../src/redact.js';
 import { chunkMessages, splitLong, degenerate } from '../src/chunker.js';
 import { DEFAULTS, merge, maskUrl } from '../src/config.js';
-import { prepare, pick, render, namedEntities, lexicalTerms, rarity, search } from '../src/recall.js';
+import { prepare, pick, render, namedEntities, lexicalTerms, rarity, search, DEFAULT_INTENT } from '../src/recall.js';
 import { projectOf } from '../src/projects.js';
 import claudeCode from '../src/adapters/claude-code.js';
 import jsonl from '../src/adapters/jsonl.js';
@@ -264,4 +264,32 @@ test('entities: names in other scripts', () => {
   assert.deepEqual(namedEntities('co mówił Łukasz', ents), ['lukasz']);
   const q = prepare('我们和王伟决定了什么', cfg, { entities: ents, tf });
   assert.ok(!q.stop, q.stop);
+});
+
+test('intent: asking to remember, in ten languages; everyday prompts do not count', () => {
+  const re = new RegExp(DEFAULT_INTENT.join('|'), 'i');
+  for (const p of [
+    'what did we decide about the retry policy?', '¿qué decidimos sobre los reintentos?',
+    'O que decidimos sobre a fila?', 'Você se lembra do problema com o importador?',
+    "Qu'est-ce qu'on a décidé pour les retries ?", 'Qu’est-ce qu’on a décidé ?', 'Où en étions-nous ?',
+    'Was haben wir zur Retry-Strategie beschlossen?', 'Weißt du noch, wie wir das gelöst haben?',
+    'Cosa abbiamo deciso per la coda?', 'Com’è andato il rilascio?',
+    'Что мы решили по поводу очереди?', 'На чём мы остановились?',
+    '我们上次怎么决定的？', '数据迁移怎么样了？', '前回何を決めた？', 'インポートの件、どうなった？',
+    '지난번에 어떻게 결정했지?', '마이그레이션 어떻게 됐어?',
+  ]) assert.ok(re.test(p), p);
+  for (const p of [
+    'run the tests and fix whatever fails', 'please add a retry with exponential backoff to the importer',
+    'corre los tests y arregla lo que falle', 'la política de privacidad dice que no guardamos datos',
+    'translate this paragraph into French', 'set the budget to 800 ms for slow laptops',
+  ]) assert.ok(!re.test(p), p);
+});
+
+test('stopwords: function words of more languages, written with accents, never content words', () => {
+  assert.ok(!terms('pourquoi toujours maintenant').size);
+  assert.ok(!terms('können vielleicht wirklich').size);
+  assert.ok(!terms('perché abbiamo sempre').size);
+  assert.ok(!terms('сейчас пожалуйста спасибо').size);
+  assert.ok(!terms('그리고 그래서 감사합니다').size);
+  assert.deepEqual([...terms('la prima del seguro y la factura')], ['prima', 'seguro', 'factura']);   // Spanish content words stay
 });

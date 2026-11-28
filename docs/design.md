@@ -75,10 +75,17 @@ whole Chinese or Thai sentence as one word, so pairs and segmented words are sto
 ~1,200 characters, that lookup takes under a millisecond; a substring scan without it took 0.3–1.2 s, over
 the recall budget.
 
-What is not multilingual yet: intent patterns ("what did we decide", "qué decidimos") and stopwords cover
-English and Spanish only (plus the commonest Chinese pairs). In other languages, configure entities: they
-open the gate in any script. The thresholds were calibrated on Spanish and English only; calibration
-numbers from other languages are very welcome.
+Intent patterns ("what did we decide", "qué decidimos", "o que decidimos", "qu'est-ce qu'on a décidé",
+"was haben wir beschlossen", "cosa abbiamo deciso", "что мы решили", "我们决定了", "何を決めた",
+"어떻게 결정했지") and stopwords cover English, Spanish, Portuguese, French, German, Italian, Russian,
+Chinese, Japanese and Korean. French and Italian patterns accept the curly apostrophe phone keyboards type.
+They were checked against 30 everyday English and Spanish prompts: none of them asks to remember, and none
+opens the gate, as before. No stopword is a content word in another of these languages (Italian "prima" is
+left out: it is a Spanish insurance term). In any other language, configure entities, which open the gate
+in any script, or `recall.intentPatterns` (which replaces the built-in list, so copy it first).
+
+The thresholds were calibrated on Spanish and English only; calibration numbers from other languages are
+very welcome.
 
 ## Indexing
 

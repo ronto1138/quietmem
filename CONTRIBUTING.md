@@ -10,6 +10,9 @@ it that way.
 - **Calibration on your corpus**, especially in a language other than English or Spanish: run the tuning
   procedure in [docs/design.md](docs/design.md#tuning-on-your-corpus) and share what you changed and why.
 - **Stopwords and intent patterns** for more languages (`src/terms.js`, `DEFAULT_INTENT` in `src/recall.js`).
+  Ten are covered; Arabic, Hindi, Turkish, Polish, Dutch, Vietnamese... are not yet. Check that the new
+  patterns open the gate for none of the everyday prompts in the tests, and that no stopword is a content
+  word in another language.
 - **Secret patterns** you have seen leak (`src/redact.js`), each with a test.
 - **Performance numbers** from `quietmem doctor` on your machine.
 

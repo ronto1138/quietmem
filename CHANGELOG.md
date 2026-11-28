@@ -17,8 +17,11 @@ the exact-match lane for Chinese, Japanese and Thai needs the new column.
 - **`chunks.dense`**: the pairs and segmented words, GIN-indexed, for the exact-match lane (Postgres' text
   search sees a whole Chinese sentence as one word). 0.5 ms on 60k chunks, against 0.3–1.2 s for a substring
   scan. `quietmem tf` fills it for chunks indexed before; `doctor` warns until `init` has added it.
-- Intent patterns and stopwords are still English and Spanish only: in other languages, configure entities.
-  See docs/design.md, "Languages".
+- **Intent patterns and stopwords in ten languages**: English and Spanish as before, plus Portuguese, French,
+  German, Italian, Russian, Chinese, Japanese and Korean ("o que decidimos", "qu'est-ce qu'on a décidé",
+  "was haben wir beschlossen", "что мы решили", "我们决定了", "何を決めた", "어떻게 결정했지"...).
+  None of 30 everyday English and Spanish prompts opens the gate, as before, and the stopwords drop no
+  English or Spanish content word. See docs/design.md, "Languages".
 - **Multi-word entities now open the gate.** `"Juan Pérez"`, `"billing service"` or `"acme.io"` in
   `recall.entities` never matched before, because prompts were compared one word at a time. They now match
   when their words appear in a row. Single-word matching is unchanged.

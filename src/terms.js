@@ -4,10 +4,12 @@
 // syllables. Scripts written without spaces are split differently: Chinese and Japanese kanji and katakana
 // into overlapping character pairs (bigrams: 王伟决定 -> 王伟 伟决 决定), because a word segmenter splits
 // names apart (王伟 -> 王 | 伟); Thai, Lao, Khmer and Myanmar with Intl.Segmenter. Hiragana is grammar and
-// is skipped. Stopwords cover English and Spanish (and the commonest Chinese pairs); extend them with
-// `extraStopwords`.
+// is skipped. Stopwords cover English, Spanish, Portuguese, French, German, Italian, Russian and Korean, plus
+// the commonest Chinese and Japanese pairs; extend them with `extraStopwords`. They are written as spoken
+// (perché, können, сейчас) and folded with norm() like everything else. Only function words: a word that is
+// a content word in another language stays out (Italian "prima" is a Spanish insurance term).
 
-const STOP = new Set(`
+const STOP_WORDS = `
   about after again also because before being could does doing from have here into just like
   make more most other over should some such than that their them then there these they this
   those through under very what when where which while will with would your please thanks
@@ -21,12 +23,32 @@ const STOP = new Set(`
   quedo queda decidimos recuerdame retomemos usamos generan propusimos problema tema cosa
   cosas todo todos toda todas algo alguno alguna nada mucho mucha muchos muy bien mejor peor
   gracias favor claro listo vale bueno buena buenos
-`.split(/\s+/).filter(Boolean));
+  ainda depois entao muito muita muitos muitas outro outra estou estao tenho temos fazer preciso precisa
+  podemos podes deveria agora aquilo coisa algum alguma alguns algumas obrigado obrigada certo vamos tudo
+  alors aussi comme cette encore faire jamais maintenant merci moins parce pendant pourquoi pouvez pouvons
+  quand quelque quelques selon toujours toutes toute votre notre nous vous leurs cela celui celle ceux
+  avoir avons avez chose choses voila juste ensuite après avant depuis regarde vérifie peux
+  allem allen alles andere anderen bitte damit danke darum diese dieser dieses durch einem einen einer
+  eines etwas gegen haben hatte hatten heute immer jetzt kannst keine können machen meine müssen schon
+  seine sollen sollte unsere warum welche werden wieder wurde würde zwischen dabei davon bereits einfach
+  genau gerade vielleicht wirklich prüfe schau
+  abbiamo adesso allora ancora anche avere bisogna essere fatto grazie molto molti nostro nostra nella
+  nelle negli oppure perché possiamo posso proprio quale quali qualche quanto quella quello quelle questi
+  questo questa sempre senza siamo sotto stato stata tutto tutti tutte vediamo voglio vorrei controlla
+  сейчас потом теперь может можно нужно очень всего всегда когда потому чтобы этого такой также только
+  сделать сделай давай давайте пожалуйста спасибо хорошо ладно проверь посмотри который которые которая
+  между после перед через более менее вообще просто будет будем почему какой какие какая сколько здесь
+  нужен нужна нужны вопрос
+  그리고 그래서 하지만 그런데 그러면 지금 이제 우리 우리가 우리는 저희 저희가 정말 진짜 그냥 혹시 이거 그거 저거
+  여기 거기 어떻게 무엇 뭐가 때문에 있는 없는 하는 해줘 해주세요 확인 부탁 부탁해 감사합니다 고마워 좋아 알겠어
+`;
 
 // Chinese pairs common enough to be noise in any corpus (rarity filters the rest once `quietmem tf` has run).
 const CJK_STOP = new Set(`
   我们 你们 他们 她们 什么 怎么 这个 那个 这些 那些 一个 没有 可以 因为 所以 但是 如果 已经 自己 现在
-  时候 知道 就是 还是 不是 这样 那样 为什 一下 一些 需要 应该 问题 我的 你的 的话
+  时候 知道 就是 还是 不是 这样 那样 为什 一下 一些 需要 应该 问题 我的 你的 的话 这里 那里 怎样 为了
+  关于 然后 或者 而且 不过 确认 检查 一点 今天 明天
+  今日 本当 大丈夫 確認 必要 場合 少し 全部 一番 今度 最近 問題 時間 自分 方法
 `.split(/\s+/).filter(Boolean));
 
 const COMBINING_MARKS = new RegExp('[\\u0300-\\u036f]', 'g');
@@ -35,6 +57,7 @@ const FOLD = { 'ß': 'ss', 'ł': 'l', 'ø': 'o', 'æ': 'ae', 'œ': 'oe', 'đ': '
 // Lowercase, fold accents (NFD, drop U+0300–U+036F, recompose so kana and Hangul stay whole) and FOLD.
 export const norm = s => String(s).toLowerCase().normalize('NFD').replace(COMBINING_MARKS, '').normalize('NFC')
   .replace(/[ßłøæœđðþı]/g, c => FOLD[c]);
+const STOP = new Set(STOP_WORDS.split(/\s+/).filter(Boolean).map(norm));
 
 // A run of letters, marks (Thai and Devanagari vowels are marks) and digits; '_', '.' and '-' inside it.
 const RUN = /[\p{L}\p{N}][\p{L}\p{M}\p{N}_.\-]*[\p{L}\p{M}\p{N}]/gu;
