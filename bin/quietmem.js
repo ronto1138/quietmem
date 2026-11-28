@@ -117,6 +117,7 @@ async function recallHook(adapterName) {
     named: q.named.length, intent: q.intent, lex: q.lexTerms.length, ph };
   if (!picked.length) bail('no_match', stats);
   const { text, count } = R.render(picked, cfg);
+  if (!count) bail('no_match', stats);
   writing = true;
   log({ injected: count, chars: text.length, sims: picked.slice(0, count).map(p => Number(p.s.toFixed(3))), ...stats });
   // Exit only after stdout drained: on Windows pipe writes are async and an early exit can truncate.
@@ -196,7 +197,7 @@ const commands = {
     const vec = await makeEmbedder(cfg).query(prompt.slice(0, 2000));
     const rows = await withDb(async db => { await db.query(R.searchSettings(cfg)); return R.candidates(db, cfg, vec, { lexTerms: q.lexTerms, ...(opt('project') ? { current: opt('project') } : {}) }); });
     const picked = R.pick(rows, cfg, q, flag('debug') ? m => console.error(m) : null);
-    console.log(picked.length ? R.render(picked, cfg).text : 'no recall: no_match');
+    console.log(R.render(picked, cfg).text || 'no recall: no_match');
   },
 
   async search() {
@@ -205,27 +206,34 @@ const commands = {
     const R = await import('../src/recall.js');
     const { redact } = await import('../src/redact.js');
     const { makeEmbedder } = await import('../src/embedder.js');
-    const vec = await makeEmbedder(cfg).query(text);
-    const rows = await withDb(async db => { await db.query(R.searchSettings(cfg)); return R.candidates(db, cfg, vec, { lexTerms: [], project: opt('project') }); });
-    for (const r of rows.slice(0, Number(opt('limit', 8)))) console.log(`\n— ${r.d} · ${r.project} · ${r.s.toFixed(3)}\n${redact(r.content).slice(0, 600)}`);
+    const vec = await makeEmbedder(cfg).query(text.slice(0, 2000));
+    const tf = R.loadTermFrequencies(cfg), limit = Number(opt('limit', 8));
+    const rows = await withDb(async db => { await db.query(R.searchSettings(cfg)); return R.search(db, cfg, vec, text, { tf, limit, project: opt('project') }); });
+    if (!rows.length) console.log('no matching fragments');
+    for (const r of rows) console.log(`\n— ${r.d} · ${r.project} · ${r.s.toFixed(3)}\n${redact(r.content).slice(0, 600)}`);
   },
 
   async tf() {
     const { terms } = await import('../src/terms.js');
     const MIN_KEEP = Number(opt('min', 30));
-    let projects = {};
-    const rows = await withDb(async db => {
+    let projects = {}, chunks = 0;
+    const df = new Map();
+    await withDb(async db => {
       await db.query('SET statement_timeout = 0');
       const { rows: pr } = await db.query('SELECT project, count(*)::int n FROM chunks GROUP BY project ORDER BY 2 DESC');
       projects = Object.fromEntries(pr.map(r => [r.project, r.n]));
-      return (await db.query('SELECT content FROM chunks')).rows;
+      // In pages by id, so memory stays flat however big the corpus grows.
+      for (let last = 0; ;) {
+        const { rows } = await db.query('SELECT id, content FROM chunks WHERE id > $1 ORDER BY id LIMIT 5000', [last]);
+        if (!rows.length) break;
+        for (const { content } of rows) for (const t of terms(content)) df.set(t, (df.get(t) || 0) + 1);
+        chunks += rows.length; last = rows[rows.length - 1].id;
+      }
     });
-    const df = new Map();
-    for (const { content } of rows) for (const t of terms(content)) df.set(t, (df.get(t) || 0) + 1);
     const kept = Object.fromEntries([...df].filter(([, n]) => n >= MIN_KEEP).sort((a, b) => b[1] - a[1]));
     mkdirSync(cfg.dataDir, { recursive: true });
-    writeFileSync(join(cfg.dataDir, 'term-frequencies.json'), JSON.stringify({ built: new Date().toISOString(), chunks: rows.length, min_keep: MIN_KEEP, projects, df: kept }));
-    console.log(`chunks=${rows.length} projects=${Object.keys(projects).length} vocabulary=${df.size} kept(df>=${MIN_KEEP})=${Object.keys(kept).length}`);
+    writeFileSync(join(cfg.dataDir, 'term-frequencies.json'), JSON.stringify({ built: new Date().toISOString(), chunks, min_keep: MIN_KEEP, projects, df: kept }));
+    console.log(`chunks=${chunks} projects=${Object.keys(projects).length} vocabulary=${df.size} kept(df>=${MIN_KEEP})=${Object.keys(kept).length}`);
   },
 
   async warm() {

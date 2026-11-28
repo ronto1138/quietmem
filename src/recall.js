@@ -88,15 +88,9 @@ export function prepare(prompt, cfg, { entities, tf }) {
   if (prompt.length < r.minChars || words < r.minWords) return { stop: 'short' };
   const qTerms = terms(prompt);
   const intentRe = new RegExp((r.intentPatterns || DEFAULT_INTENT).join('|'), 'i');
-  const named = tokens(prompt).filter(w => entities.has(w) || w.split('-').some(p => entities.has(p)));
+  const named = namedEntities(prompt, entities);
   const intent = intentRe.test(prompt);
-
-  // A term seen in fewer than minDf chunks is always rare and very rare. That keeps a small, young
-  // corpus usable (otherwise every word of a 10-chunk corpus is "common") and matches `quietmem tf`, which
-  // only stores terms with df >= minDf.
-  const chunks = tf?.chunks || 0, df = tf?.df || {}, minDf = r.minDf ?? 30;
-  const isCommon = t => (df[t] || 0) >= Math.max(minDf, chunks * r.rarePct);
-  const isVeryRare = t => (df[t] || 0) < Math.max(minDf, chunks * r.veryRarePct);
+  const { isCommon, isVeryRare } = rarity(cfg, tf);
   const rare = [...qTerms].filter(t => !isCommon(t));
 
   // With no entities configured, a rare term stands in for a named entity (less precise; configure entities).
@@ -105,9 +99,56 @@ export function prepare(prompt, cfg, { entities, tf }) {
   if (qTerms.size < (named.length ? 1 : r.minSharedTerms)) return { stop: 'few_terms' };
   if (!rare.length) return { stop: 'no_rare_terms' };
 
-  const lexTerms = [...new Set([...qTerms].flatMap(t => t.split(/[-_.]/)))]
+  return { qTerms, named, intent, rare, lexTerms: lexicalTerms(qTerms, isVeryRare), isCommon, isVeryRare };
+}
+
+/**
+ * Entities the text names. Single-word entities match a token (or a part of a hyphenated one);
+ * multi-word ones ("Juan Pérez", "billing service", "acme.io") match the same tokens in a row.
+ */
+export function namedEntities(text, entities) {
+  const toks = tokens(text);
+  const named = toks.filter(w => entities.has(w) || w.split('-').some(p => entities.has(p)));
+  const line = ` ${toks.join(' ')} `;
+  for (const e of entities) {
+    const et = tokens(e);
+    if (et.length > 1 && line.includes(` ${et.join(' ')} `)) named.push(e);
+  }
+  return named;
+}
+
+/**
+ * Rarity tests over the corpus' document frequencies. A term seen in fewer than minDf chunks is always
+ * rare and very rare. That keeps a small, young corpus usable (otherwise every word of a 10-chunk corpus
+ * is "common") and matches `quietmem tf`, which only stores terms with df >= minDf.
+ */
+export function rarity(cfg, tf) {
+  const r = cfg.recall;
+  const chunks = tf?.chunks || 0, df = tf?.df || {}, minDf = r.minDf ?? 30;
+  return {
+    isCommon: t => (df[t] || 0) >= Math.max(minDf, chunks * r.rarePct),
+    isVeryRare: t => (df[t] || 0) < Math.max(minDf, chunks * r.veryRarePct),
+  };
+}
+
+/** Very rare terms for the exact-match lane (new names embed poorly). Safe to put in a tsquery. */
+export function lexicalTerms(qTerms, isVeryRare) {
+  return [...new Set([...qTerms].flatMap(t => t.split(/[-_.]/)))]
     .filter(t => /^[a-z0-9]{4,}$/.test(t) && isVeryRare(t)).slice(0, 8);
-  return { qTerms, named, intent, rare, lexTerms, isCommon, isVeryRare };
+}
+
+/**
+ * Plain search (no gates), for `quietmem search` and the MCP search_memory tool. Exact-match hits on very
+ * rare terms are kept even when the vector ranks them low: whoever searches for a name wants the fragments
+ * that contain it. They take at most half of the results.
+ */
+export async function search(db, cfg, vec, text, { tf, limit = 8, ...opts } = {}) {
+  const lexTerms = lexicalTerms(terms(text), rarity(cfg, tf).isVeryRare);
+  const rows = await candidates(db, cfg, vec, { ...opts, lexTerms });
+  const lex = rows.filter(r => r.lex).slice(0, Math.ceil(limit / 2));
+  const keep = new Set(lex.map(r => r.id));
+  for (const r of rows) { if (keep.size >= limit) break; keep.add(r.id); }
+  return rows.filter(r => keep.has(r.id));
 }
 
 /** Vector + lexical candidates. `vec` is the query embedding. */
@@ -127,7 +168,7 @@ export async function candidates(db, cfg, vec, { sessionId, lexTerms = [], proje
          FROM chunks WHERE ${where} AND embedding IS NOT NULL AND ${FTS} @@ to_tsquery('simple', $${lp.length})
         ORDER BY embedding <=> $1::vector LIMIT 10`, lp);
     const have = new Set(all.map(r => String(r.id)));
-    all = all.concat(lex.filter(r => !have.has(String(r.id))));
+    all = all.concat(lex.filter(r => !have.has(String(r.id))).map(r => ({ ...r, lex: true })));
   }
   return all.map(r => ({ ...r, s: Number(r.s) })).sort((a, b) => b.s - a.s);
 }
@@ -168,7 +209,8 @@ export function render(picked, cfg) {
     if (out.length + block.length > r.maxChars) break;
     out += block; n++;
   }
-  return { text: out, count: n };
+  // Nothing fit (maxChars smaller than one fragment): the header alone would be noise.
+  return n ? { text: out, count: n } : { text: '', count: 0 };
 }
 
 export { searchSettings };

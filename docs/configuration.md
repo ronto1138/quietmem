@@ -60,7 +60,8 @@ re-tune after switching (see [design.md](design.md#tuning-on-your-corpus)).
 
 **`recall`**: `budgetMs`, the gates and the size limits (see [design.md](design.md)). `entities` and
 `entitiesFile` list the names that open the gate: project names, clients, services, tools, people. Matching
-is case- and accent-insensitive; a hyphenated entity also matches its parts. With `projectsAsEntities`
+is case- and accent-insensitive; a hyphenated entity also matches its parts, and a multi-word one
+(`"Juan Pérez"`, `"billing service"`, `"acme.io"`) matches when its words appear in a row. With `projectsAsEntities`
 (default `true`), the project labels found by `quietmem tf` count too, except labels that are common words in
 your corpus ("app", "src"). `intentPatterns` replaces the
 built-in "do you remember" regexes (English and Spanish) with your own list.

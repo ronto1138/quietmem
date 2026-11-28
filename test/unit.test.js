@@ -4,7 +4,7 @@ import { terms, norm } from '../src/terms.js';
 import { redact, looksLikeSecret } from '../src/redact.js';
 import { chunkMessages, splitLong, degenerate } from '../src/chunker.js';
 import { DEFAULTS, merge, maskUrl } from '../src/config.js';
-import { prepare, pick, render } from '../src/recall.js';
+import { prepare, pick, render, namedEntities, lexicalTerms, rarity, search } from '../src/recall.js';
 import { projectOf } from '../src/projects.js';
 import claudeCode from '../src/adapters/claude-code.js';
 import jsonl from '../src/adapters/jsonl.js';
@@ -203,4 +203,32 @@ test('proposals: status counts pending per project and flags near and full', asy
     { project: 'gamma', pending: 2, level: 'ok' },
   ]);
   assert.deepEqual(status(join(dir, 'missing'), 15), []);
+});
+
+test('entities: multi-word and dotted names match the same words in a row', () => {
+  const ents = new Set(['juan perez', 'billing service', 'acme.io', 'zorvantil']);
+  assert.deepEqual(namedEntities('¿Qué le dijimos a Juan Pérez sobre el contrato?', ents), ['juan perez']);
+  assert.deepEqual(namedEntities('the Billing  Service retries', ents), ['billing service']);
+  assert.deepEqual(namedEntities('deploy acme.io tonight', ents), ['acme.io']);
+  assert.deepEqual(namedEntities('juan wrote the billing code for perez', ents), []);   // not in a row
+  assert.deepEqual(namedEntities('zorvantil-importer is slow', ents), ['zorvantil-importer']);
+  assert.ok(!prepare('how did the call with Juan Pérez end up going', cfg, { entities: ents, tf }).stop);
+});
+
+test('render: returns nothing, not a bare header, when no fragment fits', () => {
+  const tight = merge(cfg, { recall: { maxChars: 50 } });
+  const out = render([{ d: '2026-11-01', project: 'p', s: 0.9, content: 'USER: zorvantil depends on quibbix' }], tight);
+  assert.deepEqual(out, { text: '', count: 0 });
+});
+
+test('search: exact matches on very rare names survive a low vector rank', async () => {
+  const { isVeryRare } = rarity(cfg, tf);
+  assert.deepEqual(lexicalTerms(new Set(['zorvantil', 'memory', 'acme-api']), isVeryRare), ['zorvantil', 'acme']);   // 'api' is too short for the exact-match lane
+  const near = Array.from({ length: 10 }, (_, i) => ({ id: String(i + 1), project: 'p', d: '2026-11-01', s: 0.9 - i / 100, content: `near ${i}` }));
+  const db = { query: async sql => ({ rows: sql.includes('to_tsquery')
+    ? [{ id: '99', project: 'p', d: '2026-11-02', s: 0.3, content: 'USER: the zorvantil job' }] : sql.startsWith('SET') ? [] : near }) };
+  const rows = await search(db, cfg, [0.1, 0.2], 'zorvantil memory', { tf, limit: 4 });
+  assert.equal(rows.length, 4);
+  assert.ok(rows.some(r => r.id === '99'), 'the only fragment naming zorvantil was dropped');
+  assert.deepEqual(rows.map(r => r.id), ['1', '2', '3', '99']);                           // still ordered by similarity
 });

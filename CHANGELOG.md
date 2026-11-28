@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Multi-word entities now open the gate.** `"Juan Pérez"`, `"billing service"` or `"acme.io"` in
+  `recall.entities` never matched before, because prompts were compared one word at a time. They now match
+  when their words appear in a row. Single-word matching is unchanged.
+- **`quietmem search` and the MCP `search_memory` tool use the exact-match lane.** It was only used by gated
+  recall, so a plain search for a brand-new name could miss the one fragment that contains it. Exact hits on
+  very rare terms now take up to half of the results.
+- **`quietmem tf` reads the corpus in pages** of 5,000 chunks instead of loading all of it at once, so memory
+  stays flat as the index grows.
+- Recall never injects the header alone when no fragment fits in `maxChars`.
+- Tests: unit tests for the above; the end-to-end test also runs `quietmem search`.
+
 ## 0.2.2 — 2026-11-25
 
 - **Indexing skips repeats within a session.** A scheduled prompt (a `/loop` or cron watcher) sends the same

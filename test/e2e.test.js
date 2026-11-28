@@ -114,6 +114,9 @@ test('e2e: index, exclusion, private projects, recall, forget, stats', { skip: !
     assert.match(fromClient, /confidential/i, logTail());                                    // visible in its own project
     assert.doesNotMatch(await ask(null), /confidential/i);                                    // unknown project: hidden
 
+    const found = await q(['search', 'zorvantil', '--limit', '2']);                          // plain search, both lanes
+    assert.match(found, /zorvantil/i);
+    assert.doesNotMatch(found, /secret project/i, 'excluded project is searchable');
     assert.match(await q(['forget', '--project', 'acme']), /would delete \d+ chunks/);       // dry run by default
     assert.ok((await psql(`SELECT count(*)::int n FROM chunks WHERE project = 'acme'`))[0].n > 0);
     await q(['forget', '--project', 'acme', '--yes']);
